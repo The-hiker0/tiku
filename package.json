@@ -1,0 +1,13 @@
+{
+  "name": "tiku",
+  "version": "1.0.0",
+  "description": "洛谷风格的个人题解库 —— 单文件 HTML，零运行时依赖",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-all.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "license": "MIT"
+}

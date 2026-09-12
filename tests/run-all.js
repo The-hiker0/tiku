@@ -12,6 +12,7 @@ const suites = [
   ['回归 · 高亮/合并/编译', 'test-regress.js'],
   ['云端 · 同步与分享链接', 'test-cloud.js'],
   ['比赛 · 分组与两级导航', 'test-contest.js'],
+  ['象棋 · 引擎与难度阶梯', 'test-xiangqi.js'],
 ];
 
 let failed = 0;

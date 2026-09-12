@@ -53,6 +53,22 @@
     padding:26px 34px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.6);
   }
   .overlay-card .txt{font-size:19px;margin-bottom:16px;letter-spacing:1px;}
+  .mask{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+        background:rgba(6,9,13,.80);backdrop-filter:blur(4px);z-index:120;padding:18px;}
+  .mask.show{display:flex;}
+  .mask-card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+        padding:22px 24px;width:min(470px,100%);box-shadow:0 26px 70px rgba(0,0,0,.75);}
+  .mask-card h3{margin:0 0 6px;font-size:17px;letter-spacing:1px;}
+  .mask-card .sub{margin:0 0 16px;font-size:12px;color:var(--dim);line-height:1.65;}
+  .lv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  button.lv{flex:none;display:flex;flex-direction:column;gap:3px;align-items:flex-start;
+        text-align:left;padding:12px 14px;}
+  button.lv b{font-size:14px;}
+  button.lv i{font-style:normal;font-size:11px;color:var(--gold);letter-spacing:1px;}
+  button.lv span{font-size:11px;color:var(--dim);line-height:1.55;}
+  button.lv.on{border-color:var(--gold);background:rgba(216,166,87,.13);}
+  button.lv.on b{color:var(--gold);}
+  .mask-acts{display:flex;gap:9px;margin-top:16px;}
   .panel{width:322px;display:flex;flex-direction:column;gap:14px;min-height:0;align-self:stretch;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;}
   .card.grow{flex:1;display:flex;flex-direction:column;min-height:180px;}
@@ -116,6 +132,17 @@
       <div class="board-wrap" id="boardWrap">
         <canvas id="board"></canvas>
         <div class="toast" id="toast"></div>
+        <div class="mask" id="lvMask">
+          <div class="mask-card">
+            <h3 id="lvTitle">选择电脑难度</h3>
+            <p class="sub" id="lvSub">你会执红先行。难度越高，电脑算得越深、越少失误。</p>
+            <div class="lv-grid" id="lvGrid"></div>
+            <div class="mask-acts">
+              <button class="primary" id="lvOk">开始对局</button>
+              <button id="lvCancel">取消</button>
+            </div>
+          </div>
+        </div>
         <div class="overlay" id="overlay">
           <div class="overlay-card">
             <div class="txt" id="overlayText"></div>
@@ -137,6 +164,9 @@
         <div class="btns">
           <button id="undoBtn">悔棋</button>
           <button id="restartBtn">重新开始</button>
+        </div>
+        <div class="btns">
+          <button id="lvBtn">🎚 难度：普通</button>
         </div>
         <div class="btns">
           <button id="sndBtn">🔊 音效</button>
@@ -435,66 +465,227 @@ function moveToChinese(pos, move) {
   return name + numStr(fileNum(fx, s), s) + tail;
 }
 
-/* ---------- 评估与搜索（人机对战） ---------- */
+/* ---------- 难度档位（4 档） ----------
+   弱档不是「随机乱走」，而是在搜索出的好着里挑一个稍差的（slack = 允许差多少分），
+   并且任何档位都不会主动把将送出去（见 findBestMove 的 suicide 过滤）。
+   这样低难度是「水平低」而不是「像坏掉」，手感更自然。 */
+const LEVELS = [
+  { name:'入门', tag:'会走漏子', depth:2, ms:300,  slack:200, topK:5, desc:'只算两步，常在几步好棋里随手挑一个。适合先熟悉规则。' },
+  { name:'普通', tag:'正常对弈', depth:4, ms:1200, slack:0,   topK:1, desc:'算到四步，能守住大子，会吃明显的漏子。' },
+  { name:'困难', tag:'算得较深', depth:6, ms:2500, slack:0,   topK:1, desc:'算到六步，每步都挑最优，很少失误。' },
+  { name:'大师', tag:'全力搜索', depth:8, ms:3500, slack:0,   topK:1, desc:'每步最多想几秒，全力搜索，认真跟你下。' },
+];
+let levelIdx = 1;                       // 默认「普通」
+const levelCfg = () => LEVELS[levelIdx] || LEVELS[1];
+
+/* ---------- 评估：子力 + 位置表 ---------- */
 const VAL = [0, 6000, 200, 200, 400, 900, 450, 100];   // 索引为棋子类型
 const MATE = 100000;
 
-/** 以红方视角估值。 */
+/** 位置表：以红方视角书写，行 0 = 对方底线，行 9 = 本方底线。
+ *  黑方取上下镜像。数值直接加在子力价值上。 */
+const PST = [];
+PST[PAWN] = [
+   0,  3,  6,  9, 12,  9,  6,  3,  0,
+  18, 36, 56, 80,120, 80, 56, 36, 18,
+  14, 26, 42, 60, 80, 60, 42, 26, 14,
+  10, 20, 30, 34, 40, 34, 30, 20, 10,
+   6, 12, 18, 18, 20, 18, 18, 12,  6,
+   2,  0,  8,  0,  8,  0,  8,  0,  2,
+   0,  0, -2,  0,  4,  0, -2,  0,  0,
+   0,  0,  0,  0,  0,  0,  0,  0,  0,
+   0,  0,  0,  0,  0,  0,  0,  0,  0,
+   0,  0,  0,  0,  0,  0,  0,  0,  0
+];
+PST[HORSE] = [
+   0,  2,  4,  6,  6,  6,  4,  2,  0,
+   2,  4,  8, 10, 10, 10,  8,  4,  2,
+   4,  8, 12, 14, 14, 14, 12,  8,  4,
+   6, 10, 14, 16, 16, 16, 14, 10,  6,
+   6, 10, 14, 16, 18, 16, 14, 10,  6,
+   6, 10, 12, 14, 16, 14, 12, 10,  6,
+   4,  8, 10, 12, 14, 12, 10,  8,  4,
+   2,  4,  6,  8, 10,  8,  6,  4,  2,
+   0,  2,  4,  6,  8,  6,  4,  2,  0,
+  -2,  0,  2,  4,  6,  4,  2,  0, -2
+];
+PST[ROOK] = [
+  12, 14, 16, 18, 18, 18, 16, 14, 12,
+  12, 16, 18, 20, 20, 20, 18, 16, 12,
+  10, 14, 16, 18, 18, 18, 16, 14, 10,
+  10, 14, 16, 18, 18, 18, 16, 14, 10,
+  10, 14, 16, 18, 18, 18, 16, 14, 10,
+   8, 12, 14, 16, 16, 16, 14, 12,  8,
+   8, 12, 14, 16, 16, 16, 14, 12,  8,
+   6, 10, 12, 14, 14, 14, 12, 10,  6,
+   6,  8, 10, 12, 12, 12, 10,  8,  6,
+   4,  6,  8, 10, 10, 10,  8,  6,  4
+];
+PST[CANNON] = [
+   6,  4,  0, -6, -8, -6,  0,  4,  6,
+   6,  2,  0, -4, -6, -4,  0,  2,  6,
+   4,  2,  0, -2, -4, -2,  0,  2,  4,
+   2,  2,  0,  0,  0,  0,  0,  2,  2,
+   0,  2,  2,  2,  4,  2,  2,  2,  0,
+   0,  0,  2,  4,  6,  4,  2,  0,  0,
+   0,  0,  2,  4,  6,  4,  2,  0,  0,
+   2,  2,  4,  6,  8,  6,  4,  2,  2,
+   2,  4,  6,  8, 10,  8,  6,  4,  2,
+   2,  4,  6,  8, 10,  8,  6,  4,  2
+];
+PST[ADVISOR] = new Array(90).fill(0);
+PST[ELEPHANT] = new Array(90).fill(0);
+PST[KING] = new Array(90).fill(0);
+/** 士/象留在宫内、靠中更稳；将离开底线是缺陷 */
+for (let y = 0; y < 10; y++) for (let x = 0; x < 9; x++) {
+  const i = y * 9 + x;
+  if (x >= 3 && x <= 5 && y >= 7) { PST[ADVISOR][i] = 6; PST[ELEPHANT][i] = 4; PST[KING][i] = 8; }
+  if (y === 9) PST[KING][i] = (x === 4) ? 14 : (x === 3 || x === 5 ? 10 : 0);
+  if (PST[KING][i] && y < 9) PST[KING][i] = -Math.abs(y - 9) * 12;   // 将离底线越远越差
+}
+
 function evaluate(pos) {
-  let score = 0;
-  for (let i = 0; i < SIZE; i++) {
+  let score = 0, kingAt = [-1, -1];
+  for (let i = 0; i < 90; i++) {
     const c = pos[i];
     if (!c) continue;
     const t = pType(c), s = pSide(c);
-    const x = i % COLS, y = (i / COLS) | 0;
-    let v = VAL[t];
-    if (t === KING) {
-      const home = s === RED ? 9 : 0;
-      v -= Math.abs(y - home) * 35;          // 离开底线是明显弱点
-      v -= Math.abs(x - 4) * 10;             // 靠近九宫中心更安全
-    } else if (t === PAWN) {
-      if (crossedRiver(y, s)) v += 80 + (s === RED ? (4 - y) : (y - 5)) * 12;  // 过河兵增值
-    } else if (t === HORSE || t === CANNON) {
-      v += (4 - Math.abs(x - 4)) * 5;
-      v += (s === RED ? 9 - y : y) * 2;
-    } else if (t === ROOK) {
-      v += (s === RED ? 9 - y : y) * 2;
+    const y = (i / 9) | 0, x = i % 9;
+    const idx = (s === RED) ? i : (9 - y) * 9 + x;    // 黑方取镜像
+    const v = VAL[t] + (PST[t] ? PST[t][idx] : 0);
+    score += (s === RED) ? v : -v;
+    if (t === KING) kingAt[s] = i;
+  }
+
+  /* 「收网」项：只在子力领先很多时才生效。
+     没有它的话，领先一个大子之后所有着法分数几乎一样，
+     引擎会原地兜圈子（实测能兜五百多手不进攻），
+     有了它就有一个把将往边上逼的梯度，赢得下来。 */
+  const lead = score > 0 ? RED : BLACK;
+  if (score >= 400 || score <= -400) {
+    const mk = kingAt[1 - lead];                     // 被围攻的将
+    if (mk >= 0) {
+      const kx = mk % 9, ky = (mk / 9) | 0;
+      let mop = 0;
+      for (let i = 0; i < 90; i++) {
+        const c = pos[i];
+        if (!c) continue;
+        const t = pType(c);
+        if (t === KING || t === ADVISOR || t === ELEPHANT) continue;
+        if (pSide(c) !== lead) continue;
+        const d = Math.max(Math.abs(i % 9 - kx), Math.abs(((i / 9) | 0) - ky));
+        const w = (t === ROOK || t === HORSE) ? 3 : (t === CANNON ? 2 : 1);
+        mop += w * Math.max(0, 12 - d);
+      }
+      // 把将赶离自己九宫的中心也加分
+      mop += (Math.abs(kx - 4) + Math.abs(ky - (lead === RED ? 0 : 9))) * 3;
+      score += (lead === RED ? 1 : -1) * Math.min(mop, 300);
     }
-    score += s === RED ? v : -v;
   }
   return score;
 }
 
-function orderMoves(pos, moves) {
-  const scored = moves.map(m => {
-    const cap = pos[(m >> 8) & 255];
-    let sc = 0;
-    if (cap) sc = VAL[pType(cap)] * 10 - VAL[pType(pos[m & 255])];   // MVV-LVA
-    return { m, sc };
-  });
-  scored.sort((a, b) => b.sc - a.sc);
-  return scored.map(o => o.m);
+/* ---------- Zobrist 哈希 + 置换表 ---------- */
+const ZP = new Int32Array(16 * 90), ZS = 0 | 0x9e3779b9;
+(function () {
+  let s = 0x2f6e2b1 | 0;
+  const rnd = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return s | 0; };
+  for (let i = 0; i < ZP.length; i++) ZP[i] = rnd();
+})();
+let H = 0;   // 当前局面的哈希，随走子增量更新
+function hashInit(pos, side) {
+  H = 0;
+  for (let i = 0; i < 90; i++) { const c = pos[i]; if (c) H ^= ZP[c * 90 + i]; }
+  if (side === BLACK) H ^= ZS;
+}
+function mkMove(pos, m) {
+  const from = m & 255, to = (m >> 8) & 255;
+  const pc = pos[from], cap = pos[to];
+  H ^= ZP[pc * 90 + from] ^ ZP[pc * 90 + to] ^ ZS;
+  if (cap) H ^= ZP[cap * 90 + to];
+  pos[to] = pc; pos[from] = 0;
+  return cap;
+}
+function umMove(pos, m, cap) {
+  const from = m & 255, to = (m >> 8) & 255;
+  const pc = pos[to];
+  pos[from] = pc; pos[to] = cap;
+  H ^= ZP[pc * 90 + from] ^ ZP[pc * 90 + to] ^ ZS;
+  if (cap) H ^= ZP[cap * 90 + to];
 }
 
+const TT_BITS = 20, TT_SIZE = 1 << TT_BITS, TT_MASK = TT_SIZE - 1;
+const ttKey = new Int32Array(TT_SIZE), ttMove = new Int32Array(TT_SIZE), ttScore = new Int32Array(TT_SIZE);
+const ttDepth = new Int8Array(TT_SIZE), ttFlag = new Int8Array(TT_SIZE);   // 0 空 1 精确 2 下界 3 上界
+function ttProbe(h, depth, alpha, beta, ply) {
+  const i = (h >>> 0) & TT_MASK;
+  if (ttFlag[i] === 0 || ttKey[i] !== h) return { move: 0, score: 0, hit: false };
+  const mv = ttMove[i];
+  if (ttDepth[i] >= depth) {
+    let sc = ttScore[i];
+    if (sc > MATE - 1000) sc -= ply; else if (sc < -MATE + 1000) sc += ply;
+    const f = ttFlag[i];
+    if (f === 1) return { move: mv, score: sc, hit: true };
+    if (f === 2 && sc >= beta) return { move: mv, score: sc, hit: true };
+    if (f === 3 && sc <= alpha) return { move: mv, score: sc, hit: true };
+  }
+  return { move: mv, score: 0, hit: false };
+}
+function ttStore(h, depth, score, flag, move, ply) {
+  const i = (h >>> 0) & TT_MASK;
+  if (ttFlag[i] !== 0 && ttKey[i] === h && ttDepth[i] > depth) return;   // 保住更深的
+  let sc = score;
+  if (sc > MATE - 1000) sc += ply; else if (sc < -MATE + 1000) sc -= ply;
+  ttKey[i] = h; ttDepth[i] = depth; ttScore[i] = sc; ttFlag[i] = flag; ttMove[i] = move;
+}
+
+/* ---------- 着法排序：置换表着法 → 吃子 → 杀手 → 历史启发 ---------- */
+const killers = new Int32Array(128 * 2);
+const histTab = new Int32Array(90 * 90);
+const KILL_SLOT = 64;
+function scoreMove(pos, m, ttMv, ply) {
+  if (m === ttMv) return 1e7;
+  const from = m & 255, to = (m >> 8) & 255, cap = pos[to];
+  if (cap) return 1e6 + VAL[pType(cap)] * 8 - VAL[pType(pos[from])];
+  const k = ply < KILL_SLOT ? ply : KILL_SLOT - 1;
+  if (killers[k * 2] === m) return 9e5;
+  if (killers[k * 2 + 1] === m) return 8.5e5;
+  return histTab[from * 90 + to];
+}
+/** 插入排序：着法数不大，比 Array.sort 快很多 */
+function orderMoves(pos, moves, ttMv, ply) {
+  const n = moves.length;
+  const sc = new Int32Array(n);
+  for (let i = 0; i < n; i++) sc[i] = scoreMove(pos, moves[i], ttMv, ply);
+  for (let i = 1; i < n; i++) {
+    const m = moves[i], sv = sc[i];
+    let j = i - 1;
+    while (j >= 0 && sc[j] < sv) { moves[j + 1] = moves[j]; sc[j + 1] = sc[j]; j--; }
+    moves[j + 1] = m; sc[j + 1] = sv;
+  }
+  return moves;
+}
+
+/* ---------- 搜索 ---------- */
 let nodes = 0, deadline = 0, aborted = false;
 
-/** 静态搜索：只展开吃子，消除地平线效应导致的送子误判。 */
-function quiesce(pos, side, alpha, beta) {
+/** 静态搜索：只展开吃子，消除地平线效应 */
+function quiesce(pos, side, alpha, beta, ply) {
   if (aborted) return 0;
-  if (findKing(pos, side) < 0) return -MATE;
-  if ((++nodes & 511) === 0 && Date.now() > deadline) { aborted = true; return 0; }
+  if ((++nodes & 1023) === 0 && Date.now() > deadline) { aborted = true; return 0; }
 
-  const stand = side === RED ? evaluate(pos) : -evaluate(pos);
+  const stand = (side === RED) ? evaluate(pos) : -evaluate(pos);
   if (stand >= beta) return stand;
   if (stand > alpha) alpha = stand;
 
-  const caps = genMoves(pos, side).filter(m => pos[(m >> 8) & 255]);
-  for (const m of orderMoves(pos, caps)) {
-    const from = m & 255, to = (m >> 8) & 255;
-    const cap = pos[to];
-    pos[to] = pos[from]; pos[from] = 0;
-    const sc = -quiesce(pos, 1 - side, -beta, -alpha);
-    pos[from] = pos[to]; pos[to] = cap;
+  const caps = [];
+  for (const m of genMoves(pos, side)) if (pos[(m >> 8) & 255]) caps.push(m);
+  orderMoves(pos, caps, 0, ply);
+  for (const m of caps) {
+    const cap = mkMove(pos, m);
+    if (pType(cap) === KING) { umMove(pos, m, cap); return MATE - ply; }   // 吃到将，直接胜
+    const sc = -quiesce(pos, 1 - side, -beta, -alpha, ply + 1);
+    umMove(pos, m, cap);
     if (aborted) return 0;
     if (sc >= beta) return sc;
     if (sc > alpha) alpha = sc;
@@ -502,32 +693,54 @@ function quiesce(pos, side, alpha, beta) {
   return alpha;
 }
 
+/** 主搜索：PVS（主变例搜索）+ 置换表 + 杀手着法 */
 function negamax(pos, side, depth, alpha, beta, ply) {
   if (aborted) return 0;
-  // 自己的将已被吃 → 立刻判负（本变体以吃将定胜负）
-  if (findKing(pos, side) < 0) return -MATE + ply;
-  if ((++nodes & 511) === 0 && Date.now() > deadline) { aborted = true; return 0; }
-  if (depth <= 0) return quiesce(pos, side, alpha, beta);
+  if ((++nodes & 1023) === 0 && Date.now() > deadline) { aborted = true; return 0; }
+
+  const alphaOrig = alpha;
+  const p = ttProbe(H, depth, alpha, beta, ply);
+  if (p.hit) return p.score;
+  if (depth <= 0) return quiesce(pos, side, alpha, beta, ply);
 
   const moves = genLegal(pos, side);
-  if (moves.length === 0) return -MATE + ply;    // 将死或困毙均判负
+  if (moves.length === 0) return -MATE + ply;
+  orderMoves(pos, moves, p.move, ply);
 
-  let best = -Infinity;
-  for (const m of orderMoves(pos, moves)) {
-    const from = m & 255, to = (m >> 8) & 255;
-    const cap = pos[to];
-    pos[to] = pos[from]; pos[from] = 0;
-    const sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
-    pos[from] = pos[to]; pos[to] = cap;          // 无论是否中断都恢复棋盘
+  let best = -Infinity, bestMove = 0, searched = 0;
+  for (const m of moves) {
+    const cap = mkMove(pos, m);
+    if (pType(cap) === KING) {          // 对方的将就在这个格子上，吃掉即胜
+      umMove(pos, m, cap);
+      best = MATE - ply; bestMove = m;
+      break;
+    }
+    let sc;
+    if (searched === 0) {
+      sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
+    } else {
+      sc = -negamax(pos, 1 - side, depth - 1, -alpha - 1, -alpha, ply + 1);   // 零窗口试探
+      if (sc > alpha && sc < beta) sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
+    }
+    umMove(pos, m, cap);
     if (aborted) return 0;
-    if (sc > best) best = sc;
-    if (best > alpha) alpha = best;
-    if (alpha >= beta) break;
+    searched++;
+    if (sc > best) { best = sc; bestMove = m; }
+    if (sc > alpha) alpha = sc;
+    if (alpha >= beta) {
+      if (!cap) {                        // 杀手着法只记非吃子
+        const k = ply < KILL_SLOT ? ply : KILL_SLOT - 1;
+        if (killers[k * 2] !== m) { killers[k * 2 + 1] = killers[k * 2]; killers[k * 2] = m; }
+        histTab[(m & 255) * 90 + ((m >> 8) & 255)] += depth * depth;
+      }
+      break;
+    }
   }
+  ttStore(H, depth, best, best <= alphaOrig ? 3 : (best >= beta ? 2 : 1), bestMove, ply);
   return best;
 }
 
-/** 局面指纹（含走子方），用于规避重复局面导致的空转。 */
+/** 局面指纹，供界面规避重复与三次重复判和 */
 function positionKey(pos, side) {
   let h = (2166136261 ^ (side + 1)) >>> 0;
   for (let i = 0; i < SIZE; i++) {
@@ -537,49 +750,140 @@ function positionKey(pos, side) {
   return h;
 }
 
+/** 该着法走完之后，对方能否立刻吃掉我方将？（只用于根节点过滤，很便宜） */
+function losesKingNow(pos, m, side) {
+  const cap = mkMove(pos, m);
+  if (pType(cap) === KING) { umMove(pos, m, cap); return false; }   // 直接吃掉对方将，当然不亏
+  const opp = 1 - side;
+  let dead = false;
+  for (const x of genLegal(pos, opp)) {
+    if (pType(pos[(x >> 8) & 255]) === KING) { dead = true; break; }
+  }
+  umMove(pos, m, cap);
+  return dead;
+}
+
 /**
- * 迭代加深 + Alpha-Beta 选着。
- * @param seen 已出现过的局面指纹集合，命中则轻微扣分以打破循环。
- * @returns {{move:number, score:number, depth:number, nodes:number}|null}
+ * 迭代加深选着。
+ * @param seen 已出现局面（Set/Map，含 .has），命中则轻微扣分以打破循环
+ * @param cfg  难度档位；不传则用当前档
  */
-function findBestMove(pos, side, maxDepth, budgetMs, seen) {
+function findBestMove(pos, side, maxDepth, budgetMs, seen, cfg) {
+  cfg = cfg || levelCfg();
+  hashInit(pos, side);
+  killers.fill(0); histTab.fill(0);
+
   const rootMoves = genLegal(pos, side);
   if (rootMoves.length === 0) return null;
 
-  deadline = Date.now() + budgetMs;
+  // 硬性保护：任何档位都不会主动把将送到对方嘴里（除非每一步都保不住）
+  const suicide = new Set();
+  for (const m of rootMoves) if (losesKingNow(pos, m, side)) suicide.add(m);
+  const safeMoves = rootMoves.filter(m => !suicide.has(m));
+  const usable = safeMoves.length ? safeMoves : rootMoves;
+
+  // 只剩一个选择（含所有保不住的极端局面）就没必要搜了
+  if (usable.length === 1) {
+    return { move: usable[0], score: 0, depth: 0, nodes: 0, only: true };
+  }
+
+  const limitDepth = cfg.depth;                       // 档位上限，优先级高于调用方的 maxDepth
+  deadline = Date.now() + (budgetMs || cfg.ms);
   nodes = 0; aborted = false;
 
-  let bestMove = rootMoves[0], bestScore = 0, reached = 0;
+  let bestMove = usable[0], bestScore = 0, reached = 0;
+  let rootScores = [];                                // 最后一次完整搜索的根着法评分
+  let aspAlpha = -Infinity, aspBeta = Infinity;
 
-  for (let d = 1; d <= maxDepth; d++) {
-    let ordered = orderMoves(pos, rootMoves);
-    if (reached > 0) {                                  // 上一层最佳着法优先搜索
-      ordered = ordered.filter(m => m !== bestMove);
-      ordered.unshift(bestMove);
-    }
-    let alpha = -Infinity, localBest = null, localScore = -Infinity;
+  for (let d = 1; d <= limitDepth; d++) {
+    orderMoves(pos, usable, bestMove, 0);
+    const alpha0 = aspAlpha, beta0 = aspBeta;
+    let alpha = alpha0, beta = beta0;
+    let localBest = 0, localScore = -Infinity;
+    const scores = [];
+    let searched = 0;
 
-    for (const m of ordered) {
-      const from = m & 255, to = (m >> 8) & 255;
-      const cap = pos[to];
-      pos[to] = pos[from]; pos[from] = 0;
-      const sc = -negamax(pos, 1 - side, d - 1, -Infinity, -alpha, 1);
-      const repeat = seen && seen.size > 0 && seen.has(positionKey(pos, 1 - side));
-      pos[from] = pos[to]; pos[to] = cap;
+    for (const m of usable) {
+      const cap = mkMove(pos, m);
+      let sc;
+      if (pType(cap) === KING) {
+        sc = MATE - 1;                                            // 一步吃将
+      } else if (seen && seen.size > 0 && seen.has(positionKey(pos, 1 - side))) {
+        /* 走到出现过的局面 = 和棋，直接记 0 分。
+           这一条很关键：否则「领先一个大子」时引擎会跟对方来回平移兜圈子，
+           实战里被三次重复判和，等于把赢棋走成和棋。记 0 之后，
+           优势方会自动避开重复、劣势方才会主动求重复。 */
+        sc = 0;
+      } else if (searched === 0) {
+        sc = -negamax(pos, 1 - side, d - 1, -beta, -alpha, 1);
+      } else {
+        sc = -negamax(pos, 1 - side, d - 1, -alpha - 1, -alpha, 1);        // 零窗口试探
+        if (sc > alpha && sc < beta) sc = -negamax(pos, 1 - side, d - 1, -beta, -alpha, 1);
+      }
+      umMove(pos, m, cap);
       if (aborted) break;
-      // 真实分数用于剪枝，扣分只影响选着，保证搜索正确性
-      const picked = (repeat && sc > -MATE + 1000) ? sc - 30 : sc;
-      if (picked > localScore) { localScore = picked; localBest = m; }
+      searched++;
+      scores.push({ m, sc });
+      if (sc > localScore) { localScore = sc; localBest = m; }
       if (sc > alpha) alpha = sc;
+      if (alpha >= beta) break;                                    // 窗口失效，本层作废
     }
 
-    if (aborted) break;                                 // 本层未搜完，丢弃
-    bestMove = localBest; bestScore = localScore; reached = d;
-    if (bestScore >= MATE - 200) break;                 // 已找到杀棋
+    if (aborted) break;
+
+    const outside = (localScore <= alpha0 || localScore >= beta0) && d > 1;
+    if (outside) {                                                 // 超出期望窗口 → 放宽后重搜本层
+      aspAlpha = -Infinity; aspBeta = Infinity;
+      orderMoves(pos, usable, localBest, 0);
+      let a2 = -Infinity, b2 = Infinity;
+      let l2Best = 0, l2Score = -Infinity;
+      const sc2 = [];
+      for (const m of usable) {
+        const cap = mkMove(pos, m);
+        let v;
+        if (pType(cap) === KING) v = MATE - 1;
+        else if (seen && seen.size > 0 && seen.has(positionKey(pos, 1 - side))) v = 0;
+        else {
+          v = (l2Best === 0) ? -negamax(pos, 1 - side, d - 1, -b2, -a2, 1)
+                             : -negamax(pos, 1 - side, d - 1, -a2 - 1, -a2, 1);
+          if (v > a2) v = -negamax(pos, 1 - side, d - 1, -b2, -a2, 1);
+        }
+        umMove(pos, m, cap);
+        if (aborted) break;
+        sc2.push({ m, sc: v });
+        if (v > l2Score) { l2Score = v; l2Best = m; }
+        if (v > a2) a2 = v;
+      }
+      if (aborted) break;
+      if (l2Best) { rootScores = sc2; bestMove = l2Best; bestScore = l2Score; reached = d; }
+    } else if (localBest) {
+      rootScores = scores; bestMove = localBest; bestScore = localScore; reached = d;
+    }
+
+    if (bestScore >= MATE - 200) break;                            // 已经找到杀，收工
     if (Date.now() > deadline) break;
+
+    // 下一层收窄窗口：分数越大窗口越宽，避免反复失败重搜
+    if (Math.abs(bestScore) >= MATE - 1000) { aspAlpha = -Infinity; aspBeta = Infinity; }
+    else {
+      const w = 40 + Math.abs(bestScore) * 0.05;
+      aspAlpha = bestScore - w; aspBeta = bestScore + w;
+    }
   }
-  return { move: bestMove, score: bestScore, depth: reached, nodes };
+
+  /* 弱档收尾：在「最好的一批着法」里随机挑一个。
+     只从评分最高的前 topK 步中挑，且分数不能离开最优超过 slack，
+     所以低难度是「选得不够精」而不是「乱走一气」。 */
+  let chosen = bestMove;
+  if ((cfg.topK | 0) > 1 && rootScores.length > 1) {
+    const sorted = rootScores.slice().sort((a, b) => b.sc - a.sc);
+    const top = sorted[0].sc;
+    const pool = sorted.filter(r => r.sc >= top - (cfg.slack | 0)).slice(0, cfg.topK);
+    if (pool.length > 1) chosen = pool[(Math.random() * pool.length) | 0].m;
+  }
+  return { move: chosen, score: bestScore, depth: reached, nodes };
 }
+
 // ===== ENGINE:END =====
 
 /* ================= 音效与背景音乐 =================
@@ -916,7 +1220,7 @@ const BOARD_MARKERS = [
 ];
 
 let pos, turn, selected = null, targets = [], history = [], lastMove = null;
-let gameOver = false, thinking = false;
+let gameOver = false, thinking = false, aiGen = 0;
 let posHistory = new Map();   // 局面指纹 → 出现次数。AI 用它规避重复，同时用于判「三次重复和棋」
 let quietPlies = 0;           // 距上次吃子的手数，用于「自然限着和棋」
 let mode = 'pvp', humanSide = RED;
@@ -1146,7 +1450,7 @@ function newGame() {
   pos = initialBoard();
   turn = RED;
   selected = null; targets = []; history = []; lastMove = null;
-  gameOver = false; thinking = false;
+  gameOver = false; thinking = false; aiGen++;      // 作废正在进行的搜索
   overlay.classList.remove('show');
   rebuildSeen();
   updateStatus();
@@ -1229,10 +1533,14 @@ function playMove(move) {
 
 function maybeAI() {
   if (mode !== 'pve' || gameOver || turn === humanSide) return;
+  if (lvMask.classList.contains('show')) return;      // 弹窗未关，先不动
   thinking = true;
   updateStatus();
+  const gen = ++aiGen;
   setTimeout(() => {
-    const res = findBestMove(pos, turn, 4, 1300, posHistory);
+    const cfg = levelCfg();
+    const res = findBestMove(pos, turn, cfg.depth, cfg.ms, posHistory, cfg);
+    if (gen !== aiGen) return;                        // 局面已被重置/悔棋，丢弃这次结果
     thinking = false;
     if (res && res.move != null) playMove(res.move);
     else updateStatus();
@@ -1241,6 +1549,7 @@ function maybeAI() {
 
 function undo() {
   if (thinking || history.length === 0) return;
+  aiGen++;
   const takeBack = () => {
     const h = history.pop();
     pos[h.move & 255] = pos[(h.move >> 8) & 255];
@@ -1282,11 +1591,67 @@ canvas.addEventListener('click', e => {
   if (c && pSide(c) === turn) selectSquare(sq);
 });
 
+/* ---------- 难度选择弹窗 ---------- */
+const lvMask = document.getElementById('lvMask');
+const lvGrid = document.getElementById('lvGrid');
+const lvBtn  = document.getElementById('lvBtn');
+const LV_KEY = 'xiangqi_level_v1';
+let lvPending = -1;          // 弹窗里临时选中的档位
+
+(function lvInit(){
+  try{ const v = parseInt(localStorage.getItem(LV_KEY), 10); if(v >= 0 && v < LEVELS.length) levelIdx = v; }catch(e){}
+  LEVELS.forEach((L, i) => {
+    const b = document.createElement('button');
+    b.className = 'lv'; b.dataset.lv = i;
+    b.innerHTML = `<b>${L.name}</b><i>${L.tag}</i><span>${L.desc}</span>`;
+    b.addEventListener('click', () => { lvPending = i; paintLvGrid(); });
+    lvGrid.appendChild(b);
+  });
+  paintLvGrid(); paintLvBtn();
+})();
+
+function paintLvGrid(){
+  [...lvGrid.children].forEach((b, i) => b.classList.toggle('on', i === lvPending));
+}
+function paintLvBtn(){
+  if (lvBtn) lvBtn.textContent = '🎚 难度：' + levelCfg().name;
+}
+function lvOpen(pending){
+  lvPending = (pending != null ? pending : levelIdx);
+  document.getElementById('lvTitle').textContent = '选择电脑难度';
+  document.getElementById('lvSub').textContent =
+    '你会执' + (humanSide === BLACK ? '黑后行' : '红先行') +
+    '。难度越高，电脑算得越深、越少失误；对你来说相应更难。';
+  paintLvGrid(); lvMask.classList.add('show');
+}
+function lvClose(){ lvMask.classList.remove('show'); }
+
+document.getElementById('lvOk').addEventListener('click', () => {
+  if (lvPending >= 0 && lvPending < LEVELS.length) {
+    levelIdx = lvPending;
+    try{ localStorage.setItem(LV_KEY, String(levelIdx)); }catch(e){}
+  }
+  paintLvBtn(); lvClose();
+  toastMsg(`电脑难度：${levelCfg().name} · ${levelCfg().tag}`);
+  newGame();
+});
+document.getElementById('lvCancel').addEventListener('click', () => {
+  lvClose();
+  if (modeSelect.value !== 'pvp') { modeSelect.value = 'pvp'; mode = 'pvp'; }
+  newGame();
+});
+lvMask.addEventListener('click', e => { if (e.target === lvMask) document.getElementById('lvCancel').click(); });
+if (lvBtn) lvBtn.addEventListener('click', () => {
+  if (mode !== 'pve') { toastMsg('先切到「人机对战」再调难度'); return; }
+  lvOpen();
+});
+
 modeSelect.addEventListener('change', () => {
   const v = modeSelect.value;
-  if (v === 'pvp') mode = 'pvp';
-  else { mode = 'pve'; humanSide = v === 'pve-black' ? BLACK : RED; }
-  newGame();
+  if (v === 'pvp') { mode = 'pvp'; newGame(); return; }
+  mode = 'pve';
+  humanSide = v === 'pve-black' ? BLACK : RED;
+  lvOpen();               // 先问难度，点「开始对局」才真正开局
 });
 
 /* ---- 声音开关 ---- */

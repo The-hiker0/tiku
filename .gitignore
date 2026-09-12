@@ -2,3 +2,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# 游戏原版音频（版权属于 4399 / 造梦西游开发方），只在本机使用，绝不入库
+*.mp3
+*.m4a
+*.ogg
+*.wav
+*.flac

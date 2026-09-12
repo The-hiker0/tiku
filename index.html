@@ -208,6 +208,39 @@ button{cursor:pointer;}
 .chip.on{background:var(--blue);border-color:var(--blue);color:var(--card-solid);}
 .cnt{padding:7px 12px;font-size:12px;color:var(--ink2);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;}
 .plist{overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch;}
+
+/* ========== 侧栏浏览模式切换 ========== */
+.side-mode{display:flex;padding:9px 10px 2px;}
+.side-mode button{
+  flex:1;border:1px solid var(--line);background:var(--soft);color:var(--ink2);
+  font-size:12.5px;font-weight:700;padding:7px 0;transition:.15s;
+}
+.side-mode button:first-child{border-radius:8px 0 0 8px;}
+.side-mode button:last-child{border-radius:0 8px 8px 0;border-left:0;}
+.side-mode button.on{background:var(--blue);border-color:var(--blue);color:var(--card-solid);}
+.pitem.addc .pitem-t{color:var(--accent);}
+
+/* ========== 比赛页 ========== */
+.crumb{
+  display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:700;
+  color:var(--accent);background:var(--blue-l);border:1px solid var(--line);
+  border-radius:6px;padding:1px 9px;cursor:pointer;transition:.15s;
+}
+.crumb:hover{background:var(--soft2);}
+.cnote{font-size:13px;color:var(--ink2);margin-top:7px;white-space:pre-wrap;}
+.clist{display:flex;flex-direction:column;gap:2px;}
+.crow{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;
+  cursor:pointer;transition:.12s;border:1px solid transparent;
+}
+.crow:hover{background:var(--blue-l);border-color:var(--line);}
+.clabel{
+  flex:0 0 26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+  background:var(--blue);color:var(--card-solid);font-size:13px;font-weight:800;
+}
+.ctitle{flex:1;min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cx0{opacity:.55;}
+.batch{border-top:1px solid var(--line);padding:14px 18px;background:var(--blue-l);}
 .pitem{
   padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;transition:.12s;
   border-left:3px solid transparent;
@@ -539,11 +572,30 @@ textarea.mono{font-family:var(--mono);font-size:12.5px;line-height:1.6;white-spa
 
 <div class="wrap" id="wrap">
   <aside class="side">
+    <div class="side-mode" id="sideMode">
+      <button data-m="prob" class="on">题目</button>
+      <button data-m="contest">比赛</button>
+    </div>
     <div class="diffs" id="diffs"></div>
     <div class="cnt"><span id="listCount">0 题</span><span id="listHint">按难度筛选</span></div>
     <div class="plist" id="plist"></div>
   </aside>
   <section class="main" id="main"></section>
+</div>
+
+<div class="mask" id="cMask">
+  <div class="modal" style="max-width:420px">
+    <div class="mhead">
+      <h2 id="cTitle">新建比赛</h2>
+      <button class="abtn pri" id="cSave">保存</button>
+      <button class="abtn" id="cCancel">取消</button>
+    </div>
+    <div class="mbody">
+      <div class="f"><label>比赛名称</label><input class="inp" id="cName" placeholder="NOIP 2024 提高组"></div>
+      <div class="f"><label>日期 <span class="hint">可留空</span></label><input class="inp" id="cDate" placeholder="2024-11-30"></div>
+      <div class="f"><label>备注 <span class="hint">可留空</span></label><textarea class="inp" id="cNote" rows="3"></textarea></div>
+    </div>
+  </div>
 </div>
 
 <div class="mask" id="editMask">
@@ -576,7 +628,10 @@ textarea.mono{font-family:var(--mono);font-size:12.5px;line-height:1.6;white-spa
         <div class="f"><label>时间限制</label><input class="inp" id="f_tl" placeholder="1s"></div>
         <div class="f"><label>内存限制</label><input class="inp" id="f_ml" placeholder="128MB"></div>
       </div>
-      <div class="f"><label>标签 <span class="hint">用空格或逗号分隔</span></label><input class="inp" id="f_tags" placeholder="动态规划 背包"></div>
+      <div class="row2">
+        <div class="f"><label>标签 <span class="hint">用空格或逗号分隔</span></label><input class="inp" id="f_tags" placeholder="动态规划 背包"></div>
+        <div class="f"><label>所属比赛 <span class="hint">可留空</span></label><select class="inp" id="f_contest"></select></div>
+      </div>
       <div class="f"><label>题目描述</label><textarea class="inp" id="f_desc" rows="4"></textarea></div>
       <div class="f"><label>输入格式</label><textarea class="inp" id="f_in" rows="2"></textarea></div>
       <div class="f"><label>输出格式</label><textarea class="inp" id="f_out" rows="2"></textarea></div>
@@ -943,9 +998,11 @@ function hlCpp(src){
 
 /* ---------------- 状态 ---------------- */
 const LS_SYNC = 'cpp_tiku_sync_v1';
-let DB = { v:2, problems:[], deleted:{} };
+let DB = { v:3, problems:[], contests:[], deleted:{} };
 let SYNC = { mode:'off', url:'', gistId:'', token:'', auto:true, gistPublic:true, lastSync:0, lastError:'' };
 let curId = null;
+let curContestId = null;   // 当前打开的比赛（curId 为空时显示比赛页）
+let sideMode = 'prob';     // 侧栏浏览模式：'prob' 按题目 / 'contest' 按比赛
 let curTab = 'desc';
 let q = '', diffFilter = -1;
 let editingId = null;      // null = 新建
@@ -957,14 +1014,17 @@ function load(){
   try{
     const raw = localStorage.getItem(LS);
     if(raw){ const o = JSON.parse(raw); if(o && Array.isArray(o.problems)) DB = o; }
-    else { DB = { v:2, problems: JSON.parse(JSON.stringify(SEED)), deleted:{} }; save(); }
+    else { DB = { v:3, problems: JSON.parse(JSON.stringify(SEED)), contests:[], deleted:{} }; save(); }
   }catch(e){
     storageOK = false;
-    DB = { v:2, problems: JSON.parse(JSON.stringify(SEED)), deleted:{} };
+    DB = { v:3, problems: JSON.parse(JSON.stringify(SEED)), contests:[], deleted:{} };
     toast('浏览器存储不可用，本次改动不会被保存');
   }
   if(!DB.deleted || typeof DB.deleted !== 'object') DB.deleted = {};
+  if(!Array.isArray(DB.contests)) DB.contests = [];     // v2 及更早的数据没有比赛字段
+  DB.contests.forEach(normalizeContest);
   DB.problems.forEach(normalize);
+  invalidateContestLinks();
   try{
     const s = localStorage.getItem(LS_SYNC);
     if(s){ const o = JSON.parse(s); if(o && typeof o === 'object') SYNC = Object.assign(SYNC, o); }
@@ -1013,8 +1073,21 @@ function normalize(p){
   p.sols = Array.isArray(p.sols) ? p.sols : [];
   p.diff = (typeof p.diff === 'number' && p.diff >= 0 && p.diff < DIFFS.length) ? p.diff : 0;
   p.updatedAt = typeof p.updatedAt === 'number' ? p.updatedAt : 0;
-  ['title','source','desc','input','output','hint','note','tl','ml'].forEach(k => { if(typeof p[k] !== 'string') p[k] = ''; });
+  ['title','source','desc','input','output','hint','note','tl','ml','contestId'].forEach(k => { if(typeof p[k] !== 'string') p[k] = ''; });
   return p;
+}
+/** 比赛：一个容器，题目通过 contestId 归属到它 */
+function normalizeContest(c){
+  if(!c || typeof c !== 'object') return c;
+  if(!c.id) c.id = uid();
+  ['name','date','note'].forEach(k => { if(typeof c[k] !== 'string') c[k] = ''; });
+  if(typeof c.updatedAt !== 'number') c.updatedAt = 0;
+  return c;
+}
+/** 题目挂到了已删除/不存在的比赛上时，解除关联，避免出现孤儿引用 */
+function invalidateContestLinks(){
+  const alive = new Set(DB.contests.map(c => c.id));
+  DB.problems.forEach(p => { if(p.contestId && !alive.has(p.contestId)) p.contestId = ''; });
 }
 function save(){
   if(storageOK){
@@ -1060,6 +1133,16 @@ function dlCode(name, code){
   setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 500);
 }
 function byId(id){ return DB.problems.find(p => p.id === id); }
+function contestById(id){ return (DB.contests || []).find(c => c.id === id) || null; }
+/** 某场比赛的题目，按录入顺序（即 A/B/C… 的顺序） */
+function problemsOf(cid){ return DB.problems.filter(p => p.contestId === cid); }
+function contestOfProblem(p){ return (p && p.contestId) ? contestById(p.contestId) : null; }
+/** 题号 A/B/C…；超过 26 题退回数字 */
+function labelOf(cid, pid){
+  const i = problemsOf(cid).findIndex(x => x.id === pid);
+  if(i < 0) return '';
+  return i < 26 ? String.fromCharCode(65 + i) : String(i + 1);
+}
 function filtered(){
   const kw = q.trim().toLowerCase();
   return DB.problems.filter(p => {
@@ -1074,6 +1157,13 @@ function filtered(){
 
 /* ---------------- 侧栏 ---------------- */
 function renderSide(){
+  document.querySelectorAll('#sideMode button').forEach(b =>
+    b.classList.toggle('on', b.dataset.m === sideMode));
+  document.getElementById('diffs').style.display = (sideMode === 'contest') ? 'none' : 'flex';
+  if(sideMode === 'contest') renderSideContests(); else renderSideProblems();
+}
+
+function renderSideProblems(){
   const counts = DIFFS.map((_, i) => DB.problems.filter(p => p.diff === i).length);
   const dbox = document.getElementById('diffs');
   dbox.innerHTML = '';
@@ -1094,7 +1184,8 @@ function renderSide(){
 
   const list = filtered();
   document.getElementById('listCount').textContent = list.length + ' 题';
-  document.getElementById('hdCount').textContent = '共 ' + DB.problems.length + ' 题';
+  document.getElementById('hdCount').textContent = '共 ' + DB.problems.length + ' 题' +
+    (DB.contests.length ? ' · ' + DB.contests.length + ' 场' : '');
   document.getElementById('listHint').textContent = q ? '搜索结果' : '按难度筛选';
 
   const box = document.getElementById('plist');
@@ -1107,16 +1198,58 @@ function renderSide(){
   list.forEach(p => {
     const el = document.createElement('div');
     el.className = 'pitem' + (p.id === curId ? ' on' : '');
+    const cn = contestOfProblem(p);
     el.innerHTML =
       '<div class="pitem-t"><span class="dot" style="background:' + DIFFS[p.diff].c + '"></span>' +
       esc(p.title || '未命名') + (p.star ? ' <span class="star">★</span>' : '') + '</div>' +
       '<div class="pitem-m">' + esc(DIFFS[p.diff].n) +
-      (p.source ? ' · ' + esc(p.source) : '') +
+      (cn ? ' · 🏁 ' + esc(cn.name) : (p.source ? ' · ' + esc(p.source) : '')) +
       (p.sols.length ? ' · ' + p.sols.length + ' 解' : '') + '</div>' +
       (p.tags.length ? '<div class="pitem-m">' + p.tags.slice(0,4).map(t => '<span class="tg">' + esc(t) + '</span>').join('') + '</div>' : '');
-    el.onclick = () => { curId = p.id; curTab = 'desc'; renderSide(); renderMain(); document.getElementById('wrap').classList.add('showdetail'); window.scrollTo(0,0); };
+    el.onclick = () => { curId = p.id; curTab = 'desc'; renderSide(); renderMain();
+      document.getElementById('wrap').classList.add('showdetail'); window.scrollTo(0,0); };
     box.appendChild(el);
   });
+}
+
+function renderSideContests(){
+  const list = DB.contests.slice().sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  document.getElementById('listCount').textContent = list.length + ' 场';
+  document.getElementById('listHint').textContent = '点开看这场有哪些题';
+  document.getElementById('hdCount').textContent = '共 ' + DB.problems.length + ' 题 · ' + list.length + ' 场';
+
+  const box = document.getElementById('plist');
+  box.innerHTML = '';
+  const add = document.createElement('div');
+  add.className = 'pitem addc';
+  add.innerHTML = '<div class="pitem-t">＋ 新建比赛</div>';
+  add.onclick = () => openContestEditor(null);
+  box.appendChild(add);
+
+  if(!list.length){
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.innerHTML = '<span class="big">🏁</span>还没有比赛<br>点上面「＋ 新建比赛」';
+    box.appendChild(e);
+    return;
+  }
+  list.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'pitem' + (c.id === curContestId ? ' on' : '');
+    const n = problemsOf(c.id).length;
+    el.innerHTML = '<div class="pitem-t">🏁 ' + esc(c.name || '未命名比赛') + '</div>' +
+      '<div class="pitem-m">' + n + ' 题' + (c.date ? ' · ' + esc(c.date) : '') + '</div>';
+    el.onclick = () => openContestPage(c.id);
+    box.appendChild(el);
+  });
+}
+
+/** 进入某场比赛：主区显示这场比赛的题目列表 */
+function openContestPage(cid){
+  curContestId = cid; curId = null; sideMode = 'contest';
+  renderSide(); renderMain();
+  document.getElementById('wrap').classList.add('showdetail');
+  window.scrollTo(0, 0);
 }
 
 /* ---------------- 主区域 ---------------- */
@@ -1124,6 +1257,8 @@ function renderMain(){
   const main = document.getElementById('main');
   const p = curId ? byId(curId) : null;
   if(!p){
+    const c = curContestId ? contestById(curContestId) : null;
+    if(c){ renderContestPage(main, c); return; }
     main.innerHTML = '<div class="card"><div class="empty">' + bigAvatar() +
       (DB.problems.length ? '从左边选一道题开始看' : '还没有题目<br>点右上角「＋ 新建」添加你的第一道题') + '</div></div>';
     return;
@@ -1133,7 +1268,10 @@ function renderMain(){
 
   let h = '<div class="card">';
   h += '<div class="phead">';
+  const cc = contestOfProblem(p);
+  const lb = cc ? labelOf(cc.id, p.id) : '';
   h += '<h1><button class="abtn back" id="btnBack" style="padding:4px 10px">← 返回</button>' +
+       (cc ? '<span class="crumb" id="crumb">🏁 ' + esc(cc.name) + (lb ? ' · ' + lb + ' 题' : '') + '</span>' : '') +
        esc(p.title || '未命名') + '<span class="badge" style="background:' + d.c + '">' + esc(d.n) + '</span></h1>';
   h += '<div class="pmeta">' +
        (p.source ? '<span>来源：' + esc(p.source) + '</span>' : '') +
@@ -1205,7 +1343,12 @@ function renderMain(){
 
   // 事件
   const on = (id, fn) => { const e = document.getElementById(id); if(e) e.onclick = fn; };
-  on('btnBack', () => { document.getElementById('wrap').classList.remove('showdetail'); });
+  on('btnBack', () => {
+    // 属于某场比赛的题，返回时回到那场比赛的题目列表，而不是直接回侧栏
+    if(cc){ curId = null; curContestId = cc.id; renderSide(); renderMain(); window.scrollTo(0,0); }
+    else document.getElementById('wrap').classList.remove('showdetail');
+  });
+  on('crumb', () => { curId = null; curContestId = cc.id; renderSide(); renderMain(); window.scrollTo(0,0); });
   on('btnStar', () => { p.star = !p.star; p.updatedAt = Date.now(); save(); renderSide(); renderMain(); });
   on('btnEdit', () => openEditor(p));
   on('btnDup', () => {
@@ -1269,6 +1412,142 @@ function codeBox(code, fname){
     '<pre class="code">' + hlCpp(code) + '</pre></div>';
 }
 
+/* ---------------- 比赛页 ---------------- */
+function renderContestPage(main, c){
+  const list = problemsOf(c.id);
+  let h = '<div class="card">';
+  h += '<div class="phead">';
+  h += '<h1><button class="abtn back" id="cBack" style="padding:4px 10px">← 返回</button>🏁 ' +
+       esc(c.name || '未命名比赛') + '</h1>';
+  h += '<div class="pmeta"><span>' + list.length + ' 题</span>' +
+       (c.date ? '<span>日期：' + esc(c.date) + '</span>' : '') + '</div>';
+  if(c.note) h += '<div class="cnote">' + esc(c.note) + '</div>';
+  h += '<div class="acts">' +
+       '<button class="abtn pri" id="cBatch">＋ 批量导入题目</button>' +
+       '<button class="abtn" id="cEdit">编辑比赛</button>' +
+       '<button class="abtn dan" id="cDel">删除比赛</button>' +
+       '</div></div>';
+
+  // 批量导入面板（默认收起）
+  h += '<div class="batch" id="batchBox" style="display:none">' +
+       '<div class="f"><label>题目链接 <span class="hint">一行一个；支持洛谷 / Codeforces / AtCoder 等</span></label>' +
+       '<textarea class="inp mono" id="batchUrls" rows="6" placeholder="https://www.luogu.com.cn/problem/P1001&#10;https://www.luogu.com.cn/problem/P1048"></textarea></div>' +
+       '<div class="imp-status" id="batchStatus">按粘贴顺序决定题号（A、B、C…）。逐个抓取，请稍候。</div>' +
+       '<div style="display:flex;gap:8px;margin-top:10px">' +
+       '<button class="wbtn" id="batchGo">开始导入</button>' +
+       '<button class="abtn" id="batchClose">收起</button></div></div>';
+
+  h += '<div class="pane on" style="padding-top:14px">';
+  if(!list.length){
+    h += '<div class="empty"><span class="big">📥</span>这场还没有题目<br>点「批量导入题目」粘贴链接，一次全抓进来</div>';
+  } else {
+    h += '<div class="clist">';
+    list.forEach((p, i) => {
+      const d = DIFFS[p.diff];
+      const lb = i < 26 ? String.fromCharCode(65 + i) : String(i + 1);
+      h += '<div class="crow" data-pid="' + p.id + '">' +
+           '<span class="clabel">' + lb + '</span>' +
+           '<span class="ctitle">' + esc(p.title || '未命名') + '</span>' +
+           '<span class="badge" style="background:' + d.c + '">' + esc(d.n) + '</span>' +
+           '<span class="cx' + (p.sols.length ? '' : ' cx0') + '">' +
+             (p.sols.length ? p.sols.length + ' 解' : '无题解') + '</span>' +
+           '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div></div>';
+  main.innerHTML = h;
+
+  const on = (id, fn) => { const e = document.getElementById(id); if(e) e.onclick = fn; };
+  on('cBack', () => {
+    curContestId = null; renderSide(); renderMain();
+    document.getElementById('wrap').classList.remove('showdetail');
+  });
+  on('cEdit', () => openContestEditor(c));
+  on('cDel', () => {
+    const n = problemsOf(c.id).length;
+    if(!confirm('删除比赛「' + (c.name || '未命名') + '」？' +
+      (n ? '\n\n注意：这场里的 ' + n + ' 道题不会一起删除，它们只会失去比赛归属。' : ''))) return;
+    DB.contests = DB.contests.filter(x => x.id !== c.id);
+    DB.deleted[c.id] = Date.now();
+    DB.problems.forEach(p => { if(p.contestId === c.id){ p.contestId = ''; p.updatedAt = Date.now(); } });
+    save(); curContestId = null; renderSide(); renderMain();
+    document.getElementById('wrap').classList.remove('showdetail');
+    toast('比赛已删除' + (n ? '，' + n + ' 道题保留' : ''));
+  });
+  on('cBatch', () => {
+    document.getElementById('batchBox').style.display = 'block';
+    document.getElementById('batchUrls').focus();
+  });
+  on('batchClose', () => { document.getElementById('batchBox').style.display = 'none'; });
+  on('batchGo', () => runBatchImport(c));
+  main.querySelectorAll('.crow').forEach(row => {
+    row.onclick = () => {
+      curId = row.dataset.pid; curTab = 'desc';
+      renderSide(); renderMain(); window.scrollTo(0, 0);
+    };
+  });
+}
+
+/** 批量导入：把粘贴的多个链接逐个抓取并归入本场比赛。
+ *  循环中刻意不重渲染主区——否则输入框会被销毁，用户就没法看到进度了。 */
+async function runBatchImport(c){
+  const urls = document.getElementById('batchUrls').value.split('\n').map(x => x.trim()).filter(Boolean);
+  const st = document.getElementById('batchStatus');
+  const set = (cls, msg) => { st.className = 'imp-status ' + cls; st.innerHTML = msg; };
+  if(!urls.length){ set('err', '先粘贴至少一个题目链接'); return; }
+
+  const btn = document.getElementById('batchGo');
+  btn.disabled = true;
+  let ok = 0; const fails = [];
+  for(let i = 0; i < urls.length; i++){
+    set('load', '<span class="spin"></span>正在抓取 ' + (i + 1) + ' / ' + urls.length + ' …');
+    try{
+      const { prob } = await fetchProblem(urls[i]);
+      if(prob._luoguTags && prob._luoguTags.length){
+        const names = await luoguTagNames(prob._luoguTags);
+        if(names.length) prob.tags = names;
+      }
+      delete prob._luoguTags;
+      prob.contestId = c.id;
+      const np = Object.assign({ id: uid(), star:false, createdAt: Date.now(), updatedAt: Date.now() }, prob);
+      normalize(np);
+      DB.problems.push(np);          // 按粘贴顺序入列，决定 A/B/C 题号
+      save2(); ok++;
+    }catch(e){ fails.push(urls[i] + '  ——  ' + ((e && e.message) || e)); }
+  }
+  btn.disabled = false;
+  c.updatedAt = Date.now(); save2();
+  renderSide(); renderMain();
+  const box = document.getElementById('batchBox');
+  const st2 = document.getElementById('batchStatus');
+  if(box) box.style.display = 'block';
+  if(fails.length){
+    st2.className = 'imp-status err';
+    st2.innerHTML = '成功 ' + ok + ' 题，失败 ' + fails.length + ' 题：<br>' + fails.map(esc).join('<br>');
+  } else {
+    st2.className = 'imp-status ok';
+    st2.innerHTML = '✓ 全部导入完成，共 ' + ok + ' 题。点下面的列表即可进入。';
+  }
+}
+
+/* ---------------- 比赛编辑器 ---------------- */
+let editingContestId = null;
+function openContestEditor(c){
+  editingContestId = c ? c.id : null;
+  document.getElementById('cTitle').textContent = c ? '编辑比赛' : '新建比赛';
+  document.getElementById('cName').value = c ? (c.name || '') : '';
+  document.getElementById('cDate').value = c ? (c.date || '') : '';
+  document.getElementById('cNote').value = c ? (c.note || '') : '';
+  document.getElementById('cMask').classList.add('show');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => { const e = document.getElementById('cName'); if(e) e.focus(); }, 60);
+}
+function closeContestEditor(){
+  document.getElementById('cMask').classList.remove('show');
+  document.body.style.overflow = '';
+}
+
 /* ---------------- 编辑器 ---------------- */
 function openEditor(p){
   editingId = p ? p.id : null;
@@ -1285,6 +1564,24 @@ function openEditor(p){
   document.getElementById('f_tl').value     = p ? p.tl : '1s';
   document.getElementById('f_ml').value     = p ? p.ml : '128MB';
   document.getElementById('f_tags').value   = p ? p.tags.join(' ') : '';
+  const csel = document.getElementById('f_contest');
+  csel.innerHTML = '<option value="">（不属于任何比赛）</option>' +
+    DB.contests.map(c => '<option value="' + c.id + '">' + esc(c.name || '未命名比赛') + '</option>').join('') +
+    '<option value="__new__">＋ 新建比赛…</option>';
+  csel.value = (p && p.contestId && contestById(p.contestId)) ? p.contestId : (curContestId || '');
+  csel.dataset.prev = csel.value;
+  csel.onchange = () => {
+    if(csel.value !== '__new__'){ csel.dataset.prev = csel.value; return; }
+    const name = prompt('比赛名称，例如「NOIP 2024 提高组」');
+    if(name && name.trim()){
+      const c = { id: uid(), name: name.trim(), date:'', note:'', updatedAt: Date.now() };
+      DB.contests.push(c); save();
+      const opt = document.createElement('option');
+      opt.value = c.id; opt.textContent = c.name;
+      csel.insertBefore(opt, csel.lastElementChild);
+      csel.value = c.id; csel.dataset.prev = c.id;
+    } else csel.value = csel.dataset.prev || '';
+  };
   document.getElementById('f_desc').value   = p ? p.desc : '';
   document.getElementById('f_in').value     = p ? p.input : '';
   document.getElementById('f_out').value    = p ? p.output : '';
@@ -1360,6 +1657,7 @@ function collect(){
     diff: parseInt(v('f_diff'), 10) || 0,
     tl: v('f_tl').trim(), ml: v('f_ml').trim(),
     tags: v('f_tags').split(/[\s,，、]+/).filter(Boolean),
+    contestId: (v('f_contest') === '__new__' ? '' : v('f_contest')),
     desc: v('f_desc'), input: v('f_in'), output: v('f_out'),
     samples: samples.length ? samples : [{ i:'', o:'' }],
     hint: v('f_hint'), note: v('f_note'),
@@ -1407,43 +1705,51 @@ const GIST_FILE = 'tiku.json';
  *  这样「A 设备删了、B 设备改过」不会把已删的题复活。 */
 function mergeDB(local, remote){
   remote = remote || {};
-  const rp = Array.isArray(remote.problems) ? remote.problems : [];
-  const lp = Array.isArray(local.problems) ? local.problems : [];
 
-  const lmap = new Map(lp.map(p => [p.id, p]));
-  const winner = new Map(lmap);
-  rp.forEach(r => { if(!r || !r.id) return;
-    const l = lmap.get(r.id);
-    if(!l || (r.updatedAt || 0) > (l.updatedAt || 0)) winner.set(r.id, r);
-  });
-
-  // 墓碑取并集，较新的时间戳胜出
+  // 墓碑：题目与比赛共用一张表（id 全局唯一）
   const del = Object.assign({}, local.deleted || {});
   const rd = remote.deleted || {};
   for(const k in rd) del[k] = Math.max(del[k] || 0, rd[k] || 0);
-  // 剪枝：太久远的墓碑没有保留价值。窗口取 365 天而不是 90 天——
-  // 若某台设备离线超过窗口期再回来同步，过短的窗口会让已删的题复活。
+  // 剪枝：窗口取 365 天而不是 90 天——若某台设备离线超过窗口期再回来同步，
+  // 过短的窗口会让已删的条目复活。
   const CUT = Date.now() - 365 * 86400000;
   for(const k in del) if(del[k] < CUT) delete del[k];
 
-  // 保序：本地顺序优先，远端独有的按更新时间倒序接在后面
-  const order = [], seen = new Set();
-  lp.forEach(p => { if(winner.has(p.id) && !seen.has(p.id)){ order.push(p.id); seen.add(p.id); } });
-  rp.filter(p => p && p.id && !seen.has(p.id))
-    .sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .forEach(p => { if(!seen.has(p.id)){ order.push(p.id); seen.add(p.id); } });
+  /** 同 id 取 updatedAt 较新的；本地顺序优先，远端独有的按时间倒序接在后面 */
+  const mergeList = (la, ra, norm) => {
+    const L = Array.isArray(la) ? la : [];
+    const R = Array.isArray(ra) ? ra : [];
+    const lmap = new Map(L.map(x => [x.id, x]));
+    const winner = new Map(lmap);
+    R.forEach(r => { if(!r || !r.id) return;
+      const l = lmap.get(r.id);
+      if(!l || (r.updatedAt || 0) > (l.updatedAt || 0)) winner.set(r.id, r);
+    });
+    const order = [], seen = new Set();
+    L.forEach(x => { if(winner.has(x.id) && !seen.has(x.id)){ order.push(x.id); seen.add(x.id); } });
+    R.filter(x => x && x.id && !seen.has(x.id))
+     .sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+     .forEach(x => { if(!seen.has(x.id)){ order.push(x.id); seen.add(x.id); } });
+    const out = [];
+    order.forEach(id => {
+      const x = winner.get(id);
+      if(!x) return;
+      // 只有确实存在墓碑、且墓碑晚于最后一次修改时才丢弃。
+      // 注意不能用 (del[id]||0) >= (x.updatedAt||0)：无墓碑时会退化成 0>=0 恒真，误删所有旧数据。
+      const dt = del[id];
+      if(dt && dt >= (x.updatedAt || 0)) return;
+      out.push(norm(x));
+    });
+    return out;
+  };
 
-  const out = [];
-  order.forEach(id => {
-    const p = winner.get(id);
-    if(!p) return;
-    // 只有确实存在墓碑、且墓碑晚于最后一次修改时才丢弃。
-    // 注意不能用 (del[id]||0) >= (p.updatedAt||0)：无墓碑时会退化成 0>=0 恒真，误删所有旧数据。
-    const dt = del[id];
-    if(dt && dt >= (p.updatedAt || 0)) return;
-    out.push(normalize(p));
-  });
-  return { v:2, problems:out, deleted:del };
+  const problems = mergeList(local.problems, remote.problems, normalize);
+  const contests = mergeList(local.contests, remote.contests, normalizeContest);
+  // 比赛可能在本轮被删掉，此时把挂在上面的题解除关联
+  const alive = new Set(contests.map(c => c.id));
+  problems.forEach(p => { if(p.contestId && !alive.has(p.contestId)) p.contestId = ''; });
+
+  return { v:3, problems, contests, deleted:del };
 }
 
 function ghHeaders(withBody){
@@ -2058,6 +2364,41 @@ async function doImportFrom(text, url, viaLabel){
 /* ---------------- 绑定 ---------------- */
 document.getElementById('q').addEventListener('input', e => { q = e.target.value; renderSide(); });
 document.getElementById('btnNew').onclick = () => openEditor(null);
+
+/* ---- 侧栏：题目 / 比赛 模式切换 ---- */
+document.querySelectorAll('#sideMode button').forEach(b => {
+  b.onclick = () => {
+    sideMode = b.dataset.m;
+    if(sideMode === 'contest') curId = null;      // 切到比赛模式时收起题目详情
+    renderSide(); renderMain();
+  };
+});
+
+/* ---- 比赛编辑器 ---- */
+document.getElementById('cCancel').onclick = closeContestEditor;
+document.getElementById('cMask').onclick = e => { if(e.target.id === 'cMask') closeContestEditor(); };
+document.getElementById('cSave').onclick = () => {
+  const name = document.getElementById('cName').value.trim();
+  if(!name){ toast('给比赛起个名字'); document.getElementById('cName').focus(); return; }
+  const data = {
+    name,
+    date: document.getElementById('cDate').value.trim(),
+    note: document.getElementById('cNote').value.trim(),
+    updatedAt: Date.now()
+  };
+  if(editingContestId){
+    const c = contestById(editingContestId);
+    if(c) Object.assign(c, data);
+    toast('已保存');
+  } else {
+    const c = Object.assign({ id: uid() }, data);
+    DB.contests.push(c);
+    curContestId = c.id; curId = null; sideMode = 'contest';
+    document.getElementById('wrap').classList.add('showdetail');
+    toast('比赛已创建，接着导入题目吧');
+  }
+  save(); closeContestEditor(); renderSide(); renderMain();
+};
 document.getElementById('edCancel').onclick = closeEditor;
 document.getElementById('addSample').onclick = () => addSampleRow('', '');
 document.getElementById('addSol').onclick = () => addSolCard(null);

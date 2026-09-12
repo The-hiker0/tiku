@@ -172,11 +172,7 @@
           <button id="sndBtn">🔊 音效</button>
           <button id="bgmBtn">🎵 音乐</button>
         </div>
-        <div class="btns">
-          <button id="bgmPickBtn">📂 换背景音乐</button>
-          <button id="bgmResetBtn" title="回到内置合成音乐">↺ 内置</button>
-        </div>
-        <div class="bgsrc" id="bgmSrc">当前：内置合成音乐</div>
+        <div class="bgsrc" id="bgmSrc">背景音乐：bgm.mp3</div>
         <div class="hint">点击己方棋子选中，再点目标位置落子。绿点＝可走，红圈＝可吃。</div>
         <div class="hint rule">本局按<b>「吃将定胜负」</b>：不拦送将着法，走出后对方吃掉你的将即判负。</div>
       </div>
@@ -887,17 +883,16 @@ function findBestMove(pos, side, maxDepth, budgetMs, seen, cfg) {
 // ===== ENGINE:END =====
 
 /* ================= 音效与背景音乐 =================
-   全部由 Web Audio 现场合成，不加载任何外部音频文件：
-   单文件依然自包含、可离线、无版权问题。
-   若同目录下存在 CUSTOM 里列出的音频文件，会自动优先使用它们
-   （想换成自己的音效，把文件放进去同名即可）。
+   背景音乐：只用同目录的 bgm.mp3，没有别的音源（原来那段合成古风循环已删除）。
+   音效：同目录有 sfx-*.mp3 就放文件，没有就用 Web Audio 现场合成兜底。
+   想换音效，把文件按 CUSTOM 里的名字放进去同名即可。
    ================================================= */
 const CUSTOM = {
   move:'sfx-move.mp3', capture:'sfx-capture.mp3', check:'sfx-check.mp3',
-  win:'sfx-win.mp3', lose:'sfx-lose.mp3', bgm:'bgm.mp3'
+  win:'sfx-win.mp3', lose:'sfx-lose.mp3'
 };
-const SND = { ctx:null, master:null, sfx:null, bgm:null, sfxOn:true, bgmOn:true, custom:{} };
-const BGM = { on:false, timer:null, step:0, next:0, spb:0.28 };   // spb = 每步时长(秒)
+const BGM_SRC = 'bgm.mp3';      // 唯一的背景音乐来源
+const SND = { ctx:null, master:null, sfx:null, sfxOn:true, bgmOn:true, custom:{} };
 
 function sndInit(){
   if(SND.ctx) return true;
@@ -906,23 +901,37 @@ function sndInit(){
   try{ SND.ctx = new AC(); }catch(e){ return false; }
   SND.master = SND.ctx.createGain(); SND.master.gain.value = 0.9; SND.master.connect(SND.ctx.destination);
   SND.sfx = SND.ctx.createGain();    SND.sfx.gain.value = 1.0;    SND.sfx.connect(SND.master);
-  SND.bgm = SND.ctx.createGain();    SND.bgm.gain.value = 0.0001; SND.bgm.connect(SND.master);
-  // 外部音频（可选）：能加载就用，加载不到就静默忽略
+  // 音效文件（可选）：能加载就用，加载不到就静默忽略、回落合成音
   for(const k in CUSTOM){
     try{
       const a = new Audio();
       a.preload = 'auto';
-      if(k === 'bgm') a.loop = true;
-      a.addEventListener('canplaythrough', () => {
-        SND.custom[k] = a;
-        if(k === 'bgm'){ paintBgmSrc(); if(SND.bgmOn && !customBgmEl) bgmStart(); }
-      }, { once:true });
+      a.addEventListener('canplaythrough', () => { SND.custom[k] = a; }, { once:true });
       a.addEventListener('error', () => {}, { once:true });
       a.src = CUSTOM[k];
     }catch(e){}
   }
   return true;
 }
+/* 背景音乐探测：<audio> 元素和 Web Audio 无关，页面一载入就能问它在不在。
+   不这样做的话，要等用户第一次点击才会 sndInit，按钮会先错误地显示「缺 bgm.mp3」。 */
+function probeBgm(cb){
+  try{
+    const a = new Audio();
+    a.preload = 'auto'; a.loop = true; a.volume = 0.5;
+    let done = false;
+    const fin = ok => {
+      if(done) return; done = true;
+      if(ok) SND.custom.bgm = a;
+      cb(ok);
+    };
+    a.addEventListener('canplaythrough', () => fin(true), { once:true });
+    a.addEventListener('error', () => fin(false), { once:true });
+    a.src = BGM_SRC;
+    if(a.readyState >= 3) fin(true);
+  }catch(e){ cb(false); }
+}
+
 /** 确保音频上下文可用并已解除挂起。
  *  必须返回布尔值——音效函数用它做守卫；若返回 undefined，
  *  `!sndResume()` 恒为真，会导致所有音效被静默跳过。 */
@@ -1012,98 +1021,18 @@ function sfxEnd(win){
   noiseBurst(t, 0.09, 0.22, 600);
 }
 
-/* ---------- 用户自备音乐（存 IndexedDB，只在本机播放，不进代码/仓库） ---------- */
-const AUDIO_DB = 'xiangqi_audio_v1', AUDIO_STORE = 'files';
-let customBgmUrl = null, customBgmEl = null, customBgmName = '';
-function idbOpen(){
-  return new Promise((res, rej) => {
-    try{
-      const r = indexedDB.open(AUDIO_DB, 1);
-      r.onupgradeneeded = () => { try{ r.result.createObjectStore(AUDIO_STORE); }catch(e){} };
-      r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
-    }catch(e){ rej(e); }
-  });
-}
-function idbPut(k, v){
-  return idbOpen().then(d => new Promise((res, rej) => {
-    const t = d.transaction(AUDIO_STORE, 'readwrite');
-    t.objectStore(AUDIO_STORE).put(v, k);
-    t.oncomplete = res; t.onerror = () => rej(t.error);
-  }));
-}
-function idbGet(k){
-  return idbOpen().then(d => new Promise((res, rej) => {
-    const t = d.transaction(AUDIO_STORE, 'readonly');
-    const q = t.objectStore(AUDIO_STORE).get(k);
-    q.onsuccess = () => res(q.result);
-    q.onerror = () => rej(q.error);
-  }));
-}
-function idbDel(k){
-  return idbOpen().then(d => new Promise((res, rej) => {
-    const t = d.transaction(AUDIO_STORE, 'readwrite');
-    t.objectStore(AUDIO_STORE).delete(k);
-    t.oncomplete = res; t.onerror = () => rej(t.error);
-  }));
-}
-/** 启动时恢复上次选的音乐；文件只存在本机浏览器里 */
-async function restoreCustomBgm(){
-  try{
-    const rec = await idbGet('bgm');
-    if(rec && rec.blob){
-      customBgmUrl = URL.createObjectURL(rec.blob);
-      customBgmName = rec.name || '自定义音乐';
-      customBgmEl = new Audio();
-      customBgmEl.src = customBgmUrl; customBgmEl.loop = true; customBgmEl.volume = 0.5;
-    }
-  }catch(e){}
-  paintBgmSrc();
-}
-/** 换一首：从设备里选音频文件 */
-async function pickBgm(){
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = 'audio/*';
-  inp.style.cssText = 'position:fixed;left:-9999px';
-  document.body.appendChild(inp);
-  inp.onchange = async () => {
-    const f = inp.files && inp.files[0];
-    document.body.removeChild(inp);
-    if(!f) return;
-    try{
-      await idbPut('bgm', { blob: f, name: f.name });
-      if(customBgmEl) customBgmEl.pause();
-      if(customBgmUrl) URL.revokeObjectURL(customBgmUrl);
-      customBgmUrl = URL.createObjectURL(f);
-      customBgmName = f.name;
-      customBgmEl = new Audio();
-      customBgmEl.src = customBgmUrl; customBgmEl.loop = true; customBgmEl.volume = 0.5;
-      bgmStop();
-      if(SND.bgmOn) bgmStart();
-      paintBgmSrc();
-      toastMsg('已换成：' + f.name);
-    }catch(e){ toastMsg('这个文件读不了，换个格式试试'); }
-  };
-  inp.click();
-}
-/** 恢复内置合成音乐 */
-async function clearCustomBgm(){
-  try{ await idbDel('bgm'); }catch(e){}
-  if(customBgmEl){ customBgmEl.pause(); customBgmEl = null; }
-  if(customBgmUrl){ URL.revokeObjectURL(customBgmUrl); customBgmUrl = null; }
-  customBgmName = '';
-  bgmStop(); if(SND.bgmOn) bgmStart();
-  paintBgmSrc();
-  toastMsg('已恢复内置音乐');
-}
+/* ---------- 背景音乐来源显示 ---------- */
+let bgmProbed = false;          // false = 还在探测，true = 结果已确定
 function paintBgmSrc(){
   const el = document.getElementById('bgmSrc');
   if(!el) return;
-  const ext = activeBgmEl();
-  el.textContent = ext
-    ? ('当前：' + (customBgmName || (ext.src || '').split('/').pop() || '外部音乐'))
-    : '当前：内置合成音乐';
+  if(SND.custom.bgm){ el.textContent = '背景音乐：bgm.mp3'; el.style.color = ''; return; }
+  el.style.color = '#c98a5a';
+  el.textContent = bgmProbed
+    ? '背景音乐：没找到 bgm.mp3（把它放到本页同目录就能响）'
+    : '背景音乐：正在加载 bgm.mp3…';
 }
+
 let toastTimer = null;
 function toastMsg(t){
   const el = document.getElementById('toast');
@@ -1112,93 +1041,17 @@ function toastMsg(t){
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
 }
 
-/* ---------- 背景音乐：五声音阶 · 古筝式拨弦 + 低音 + 鼓点 ---------- */
-const PENTA = [293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99]; // D E G A C D E G
-const MEL  = [0,2,3,4, 3,2,3,-1,  1,2,3,5, 4,3,2,-1,
-              2,3,4,6, 5,4,3,-1,  1,0,1,2, 0,-1,-1,-1];
-const BASS = [0,-1,-1,-1, 4,-1,-1,-1, 1,-1,-1,-1, 5,-1,-1,-1,
-              2,-1,-1,-1, 6,-1,-1,-1, 1,-1,-1,-1, 0,-1,-1,-1];
-function pluck(freq, at, dur, vol){
-  const c = SND.ctx, o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
-  o.type = 'triangle'; o.frequency.value = freq;
-  f.type = 'lowpass';                                   // 拨弦的亮度随时间衰减
-  f.frequency.setValueAtTime(freq * 6, at);
-  f.frequency.exponentialRampToValueAtTime(freq * 1.6, at + dur);
-  g.gain.setValueAtTime(0.0001, at);
-  g.gain.exponentialRampToValueAtTime(vol, at + 0.006);
-  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-  o.connect(f); f.connect(g); g.connect(SND.bgm);
-  o.start(at); o.stop(at + dur + 0.03);
-}
-function bgmDrum(at, vol){
-  const c = SND.ctx;
-  const len = Math.floor(c.sampleRate * 0.09);
-  const buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
-  for(let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 4);
-  const src = c.createBufferSource(); src.buffer = buf;
-  const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320;
-  const g = c.createGain(); g.gain.value = vol;
-  src.connect(f); f.connect(g); g.connect(SND.bgm);
-  src.start(at);
-  // 低频鼓心：必须自建振荡器接到 bgm 通道。
-  // 不能借用 tone()——那个是接 SND.sfx 的，会把鼓点漏到音效通道上，
-  // 造成「关了音效鼓还在响 / 关了音乐鼓也不停」。
-  const o = c.createOscillator(), og = c.createGain();
-  o.type = 'sine';
-  o.frequency.setValueAtTime(75, at);
-  o.frequency.exponentialRampToValueAtTime(45, at + 0.14);
-  og.gain.setValueAtTime(0.0001, at);
-  og.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol * 0.9), at + 0.006);
-  og.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
-  o.connect(og); og.connect(SND.bgm);
-  o.start(at); o.stop(at + 0.2);
-}
-function bgmStep(i, at){
-  const m = MEL[i % MEL.length];
-  if(m >= 0){ pluck(PENTA[m], at, 0.85, 0.16); pluck(PENTA[m] * 2, at, 0.30, 0.045); }
-  const b = BASS[i % BASS.length];
-  if(b >= 0) pluck(PENTA[b] / 2, at, 1.5, 0.20);
-  if(i % 4 === 0) bgmDrum(at, i % 8 === 0 ? 0.20 : 0.10);
-}
-function bgmTick(){
-  if(!BGM.on || !SND.ctx) return;
-  const now = SND.ctx.currentTime;
-  while(BGM.next < now + 0.25){ bgmStep(BGM.step, BGM.next); BGM.next += BGM.spb; BGM.step++; }
-}
-/** 当前生效的外部音乐：优先用「换背景音乐」选的文件，其次同目录的 bgm.mp3 */
-function activeBgmEl(){
-  return customBgmEl || SND.custom.bgm || null;
-}
+/* ---------- 背景音乐：只有一个音源，同目录的 bgm.mp3 ---------- */
+function bgmEl(){ return SND.custom.bgm || null; }
 function bgmStart(){
-  if(!SND.bgmOn) return;
-  const el = activeBgmEl();
-  if(el){
-    el.volume = 0.5;
-    el.play().catch(()=>{});
-    return;
-  }
-  if(!SND.ctx && !sndInit()) return;
-  sndResume();
-  if(BGM.on) return;
-  BGM.on = true; BGM.step = 0;
-  BGM.next = SND.ctx.currentTime + 0.12;
-  const g = SND.bgm.gain, now = SND.ctx.currentTime;
-  g.cancelScheduledValues(now);
-  g.setValueAtTime(0.0001, now);
-  g.exponentialRampToValueAtTime(0.42, now + 1.5);      // 淡入
-  BGM.timer = setInterval(bgmTick, 60);
-  bgmTick();
+  const el = bgmEl();
+  if(!el) return;                       // 没有 bgm.mp3 就没有背景音乐
+  el.volume = 0.5;
+  el.play().catch(()=>{});              // 浏览器可能还没给交互权限，静默忽略
 }
 function bgmStop(){
-  const el = activeBgmEl();
+  const el = bgmEl();
   if(el){ try{ el.pause(); }catch(e){} }
-  BGM.on = false;
-  if(BGM.timer){ clearInterval(BGM.timer); BGM.timer = null; }
-  if(!SND.ctx) return;
-  const g = SND.bgm.gain, now = SND.ctx.currentTime;
-  g.cancelScheduledValues(now);
-  g.setValueAtTime(Math.max(0.0001, g.value), now);
-  g.exponentialRampToValueAtTime(0.0001, now + 0.45);   // 淡出
 }
 
 /* ================= 界面与交互 ================= */
@@ -1667,10 +1520,19 @@ function sndPrefs(save){
 }
 function paintSndBtns(){
   const s = document.getElementById('sndBtn'), b = document.getElementById('bgmBtn');
+  const hasBgm = !!bgmEl();
   if(s) s.textContent = SND.sfxOn ? '🔊 音效' : '🔇 音效';
-  if(b) b.textContent = SND.bgmOn ? '🎵 音乐' : '🎵 音乐(关)';
   if(s) s.style.opacity = SND.sfxOn ? '1' : '.55';
-  if(b) b.style.opacity = SND.bgmOn ? '1' : '.55';
+  if(!b) return;
+  if(!hasBgm){
+    b.textContent = bgmProbed ? '🎵 音乐（缺 bgm.mp3）' : '🎵 音乐…';
+    b.style.opacity = '.55';
+    b.title = bgmProbed ? '把 bgm.mp3 放到本页同目录' : '正在加载 bgm.mp3';
+    return;
+  }
+  b.title = '背景音乐：bgm.mp3';
+  b.textContent = SND.bgmOn ? '🎵 音乐' : '🎵 音乐(关)';
+  b.style.opacity = SND.bgmOn ? '1' : '.55';
 }
 sndPrefs(false);
 document.getElementById('sndBtn').addEventListener('click', () => {
@@ -1680,15 +1542,18 @@ document.getElementById('sndBtn').addEventListener('click', () => {
   sndPrefs(true); paintSndBtns();
 });
 document.getElementById('bgmBtn').addEventListener('click', () => {
+  if(!bgmEl()){ toastMsg('没找到 bgm.mp3，把它放到本页同目录就能放音乐'); return; }
   SND.bgmOn = !SND.bgmOn;
   if(SND.bgmOn) bgmStart(); else bgmStop();
   sndPrefs(true); paintSndBtns();
 });
-
-document.getElementById('bgmPickBtn').addEventListener('click', pickBgm);
-document.getElementById('bgmResetBtn').addEventListener('click', clearCustomBgm);
-restoreCustomBgm();          // 启动时恢复上次选的音乐（文件存在本机浏览器）
+paintBgmSrc();
 paintSndBtns();
+probeBgm(ok => {
+  bgmProbed = true;
+  paintBgmSrc(); paintSndBtns();
+  if(ok && SND.bgmOn) bgmStart();
+});
 
 // 浏览器不允许没交互就出声：第一次点击/按键时再启动音乐
 function sndFirstGesture(){

@@ -3,9 +3,12 @@ node_modules/
 Thumbs.db
 *.log
 
-# 游戏原版音频（版权属于 4399 / 造梦西游开发方），只在本机使用，绝不入库
+# 音频文件默认不入库。
+# 例外：xiangqi/bgm.mp3 —— 唯一被允许提交的音频，因为象棋页面固定用它当背景音乐，
+# 线上版本要有声音就必须带上它。版权不属于本仓库，详见 NOTICE。
 *.mp3
 *.m4a
 *.ogg
 *.wav
 *.flac
+!xiangqi/bgm.mp3

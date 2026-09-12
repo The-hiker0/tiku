@@ -32,3 +32,33 @@ If you need to use this project commercially, or want the entire project
 under MIT, remove the embedded artwork: search for `--bg-art` in index.html
 and delete those two custom-property definitions plus the `body::before`
 background rule.
+
+
+Third-party audio notice: xiangqi/bgm.mp3
+=========================================
+xiangqi/bgm.mp3 is NOT covered by LICENSE (MIT) or LICENSE-ARTWORK
+(CC BY-NC-SA 4.0). It is a music track taken from the 4399 Flash game
+造梦西游, added at the repository owner's request so that the Chinese-chess
+page has background music on the published site.
+
+  Copyright belongs to the original rights holder (4399 / the game's
+  developers and composers), not to this repository.
+
+Stated plainly:
+
+  - The MIT and CC BY-NC-SA grants in this repository do NOT extend to
+    xiangqi/bgm.mp3. If you fork or redistribute this project, either drop
+    that file or clear the rights yourself.
+  - This repository holds no license to sublicense this track.
+  - A takedown request from the rights holder will be honoured: the file
+    gets deleted and re-added to .gitignore.
+
+The chess page degrades gracefully without it: background music is then
+simply absent (the UI says so and the button is disabled), the synthesised
+sound effects keep working, and nothing else changes. To remove the track:
+
+    git rm xiangqi/bgm.mp3
+    printf 'xiangqi/bgm.mp3\n' >> .gitignore
+
+xiangqi/bgm.mp3 is the only audio file intentionally tracked by git; see
+.gitignore, which still ignores *.mp3 everywhere else.

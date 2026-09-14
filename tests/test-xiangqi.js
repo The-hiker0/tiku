@@ -184,10 +184,24 @@ ck('思考时间随难度递增', LEVELS.every((L, i) => i === 0 || L.ms > LEVEL
      必须先搜"困难"（冷表，节点数真实），再搜"入门"。
      反过来的话，困难的节点数会被入门预热过的置换表压低，
      这条断言就会看起来失败——但那是测量方式的问题，不是引擎变弱了。 */
-  const deep = E.findBestMove(E.initialBoard(), RED, 99, 100000, null, Object.assign({}, LEVELS[2]));
-  const shallow = E.findBestMove(E.initialBoard(), RED, 99, 100000, null, Object.assign({}, LEVELS[0], { topK: 1, slack: 0 }));
+  /* 必须关掉开局库：初始局面在库里，开着库两边都会直接返回 depth=0/nodes=0，
+     这条断言就变成"0 > 0"了。这里要测的是**搜索**能力，不是查表。 */
+  const deep = E.findBestMove(E.initialBoard(), RED, 99, 100000, null,
+                              Object.assign({}, LEVELS[2], { useBook: false }));
+  const shallow = E.findBestMove(E.initialBoard(), RED, 99, 100000, null,
+                                 Object.assign({}, LEVELS[0], { topK: 1, slack: 0, useBook: false }));
   ck('困难档搜索层数多于入门档', deep.depth > shallow.depth, true);
   ck('困难档搜索节点数远多于入门档', deep.nodes > shallow.nodes * 10, true);
+}
+
+/* 开局库：初始局面必须能查到着法，且查到的着法要合法 */
+{
+  const b = E.initialBoard();
+  const r = E.findBestMove(b, RED, 99, 100000, null,
+                           Object.assign({}, LEVELS[2], { useBook: true }));
+  ck('开局库在初始局面命中', r && r.book === true, true);
+  ck('开局库返回的着法是合法着法',
+     !!r && genLegal(b, RED).includes(r.move), true);
 }
 
 /* 一个很短的实战确认：困难档执红 vs 入门档执黑，红方应能取胜 */

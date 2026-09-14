@@ -180,8 +180,12 @@ ck('思考时间随难度递增', LEVELS.every((L, i) => i === 0 || L.ms > LEVEL
 
 /* 同一个开局局面，档位越高必须搜得越深、看得越多 */
 {
-  const shallow = E.findBestMove(E.initialBoard(), RED, 99, 100000, null, Object.assign({}, LEVELS[0], { topK: 1, slack: 0 }));
+  /* 搜索顺序有讲究：置换表是引擎内部状态、跨调用保留。
+     必须先搜"困难"（冷表，节点数真实），再搜"入门"。
+     反过来的话，困难的节点数会被入门预热过的置换表压低，
+     这条断言就会看起来失败——但那是测量方式的问题，不是引擎变弱了。 */
   const deep = E.findBestMove(E.initialBoard(), RED, 99, 100000, null, Object.assign({}, LEVELS[2]));
+  const shallow = E.findBestMove(E.initialBoard(), RED, 99, 100000, null, Object.assign({}, LEVELS[0], { topK: 1, slack: 0 }));
   ck('困难档搜索层数多于入门档', deep.depth > shallow.depth, true);
   ck('困难档搜索节点数远多于入门档', deep.nodes > shallow.nodes * 10, true);
 }

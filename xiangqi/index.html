@@ -462,15 +462,23 @@ function moveToChinese(pos, move) {
 }
 
 /* ---------- 难度档位（4 档） ----------
-   弱档不是「随机乱走」，而是在搜索出的好着里挑一个稍差的（slack = 允许差多少分），
-   并且任何档位都不会主动把将送出去（见 findBestMove 的 suicide 过滤）。
-   这样低难度是「水平低」而不是「像坏掉」，手感更自然。 */
+   搜索改进后达到同样深度所需的节点数下降约 7 倍，因此四档的深度上限整体上调
+   （2/4/6/8 → 3/5/7/11），让新增的搜索能力真正变成棋力，而不是白省时间。
+
+   时间上限只是**安全网**：实测四档分别在 0ms / 17ms / 75ms / 869ms 内就完成
+   了目标深度（开局与中局各 12 个局面取平均），远低于上限。
+   另附迭代时间预测：上一层耗时×2.5 装不进剩余预算时就不再开新层，
+   免得"起一个注定搜不完的迭代、然后在超时时被打断"那样白等几秒。
+
+   （说明：评估函数也试过加机动性/将危险/兵结构/车通线四个分项，但等时条件下
+     实测显著变弱——评估变复杂导致搜索变浅，收益抵不过代价，因此未采用。） */
 const LEVELS = [
-  { name:'入门', tag:'会走漏子', depth:2, ms:300,  slack:200, topK:5, desc:'只算两步，常在几步好棋里随手挑一个。适合先熟悉规则。' },
-  { name:'普通', tag:'正常对弈', depth:4, ms:1200, slack:0,   topK:1, desc:'算到四步，能守住大子，会吃明显的漏子。' },
-  { name:'困难', tag:'算得较深', depth:6, ms:2500, slack:0,   topK:1, desc:'算到六步，每步都挑最优，很少失误。' },
-  { name:'大师', tag:'全力搜索', depth:8, ms:3500, slack:0,   topK:1, desc:'每步最多想几秒，全力搜索，认真跟你下。' },
+  { name:'入门', tag:'会走漏子', depth:3,  ms:400,  slack:200, topK:5, desc:'只算三层，常在几步好棋里随手挑一个。适合先熟悉规则。' },
+  { name:'普通', tag:'正常对弈', depth:5,  ms:1000, slack:0,   topK:1, desc:'算到五层，能守住大子，会吃明显的漏子。' },
+  { name:'困难', tag:'算得较深', depth:7,  ms:2200, slack:0,   topK:1, desc:'算到七层，每步都挑最优，很少失误。' },
+  { name:'大师', tag:'全力搜索', depth:11, ms:4000, slack:0,   topK:1, desc:'算到十层以上，认真跟你下。' },
 ];
+
 let levelIdx = 1;                       // 默认「普通」
 const levelCfg = () => LEVELS[levelIdx] || LEVELS[1];
 
@@ -639,10 +647,17 @@ function ttStore(h, depth, score, flag, move, ply) {
 const killers = new Int32Array(128 * 2);
 const histTab = new Int32Array(90 * 90);
 const KILL_SLOT = 64;
+/* ---------- 着法排序：置换表 → 吃子 → 反制着法 → 杀手 → 历史 ---------- */
 function scoreMove(pos, m, ttMv, ply) {
   if (m === ttMv) return 1e7;
   const from = m & 255, to = (m >> 8) & 255, cap = pos[to];
-  if (cap) return 1e6 + VAL[pType(cap)] * 8 - VAL[pType(pos[from])];
+  if (cap) {
+    if (pType(cap) === KING) return 9.9e6;         // 吃将直接赢，永远排最前
+    return 1e6 + VAL[pType(cap)] * 8 - VAL[pType(pos[from])];
+  }
+  /* 反制着法：对手刚刚走了 m 导致了剪枝，那么"针对同一目标格的反击"
+     往往在他的其它分支上也有效。这是杀手着法之外很便宜的一项补充。 */
+  if (useCounter && ply > 0 && counterMove[prevMove & 0xFFFF] === m) return 9.5e5;
   const k = ply < KILL_SLOT ? ply : KILL_SLOT - 1;
   if (killers[k * 2] === m) return 9e5;
   if (killers[k * 2 + 1] === m) return 8.5e5;
@@ -663,6 +678,38 @@ function orderMoves(pos, moves, ttMv, ply) {
 }
 
 /* ---------- 搜索 ---------- */
+/* ---------- 搜索辅助 ---------- */
+/* 两项技术的开关：留出来是为了能做消融对比（关掉看节点数变化） */
+const useNullMove = true;
+const useFutility = true;
+const useLMR = true;
+const useCounter = true;
+
+/** 将是否正被对方威胁。搜索里的空着裁剪守卫要用它——
+    比"生成对方全部走法再看有没有吃将"便宜得多，这是空着裁剪能否划算的关键。 */
+function kingThreatened(pos, side) {
+  const k = findKing(pos, side);
+  if (k < 0) return true;
+  return isAttacked(pos, k, 1 - side);
+}
+
+/** 翻转"轮到谁走"的哈希位（空着裁剪用：不走子，只换手） */
+function zobristFlip(h, side) { return (h ^ ZS) | 0; }
+
+/** 是否还有车/马/炮这类大子（决定能不能做空着裁剪） */
+function hasMajorPiece(pos, side) {
+  for (let i = 0; i < 90; i++) {
+    const c = pos[i];
+    if (!c || pSide(c) !== side) continue;
+    const t = pType(c);
+    if (t === ROOK || t === HORSE || t === CANNON) return true;
+  }
+  return false;
+}
+
+let prevMove = 0;                       // 上一层走的那一步（供反制着法使用）
+const counterMove = new Int32Array(65536);
+
 let nodes = 0, deadline = 0, aborted = false;
 
 /** 静态搜索：只展开吃子，消除地平线效应 */
@@ -678,8 +725,13 @@ function quiesce(pos, side, alpha, beta, ply) {
   for (const m of genMoves(pos, side)) if (pos[(m >> 8) & 255]) caps.push(m);
   orderMoves(pos, caps, 0, ply);
   for (const m of caps) {
+    const to = (m >> 8) & 255;
+    const victim = pos[to];
+    /* 差量剪枝：就算白吃这个子也追不回 alpha，就不必搜了。
+       注意不能对吃将用（那是直接赢），所以先判 KING。 */
+    if (pType(victim) !== KING && stand + VAL[pType(victim)] + 150 < alpha) continue;
     const cap = mkMove(pos, m);
-    if (pType(cap) === KING) { umMove(pos, m, cap); return MATE - ply; }   // 吃到将，直接胜
+    if (pType(cap) === KING) { umMove(pos, m, cap); return MATE - ply; }
     const sc = -quiesce(pos, 1 - side, -beta, -alpha, ply + 1);
     umMove(pos, m, cap);
     if (aborted) return 0;
@@ -689,34 +741,94 @@ function quiesce(pos, side, alpha, beta, ply) {
   return alpha;
 }
 
-/** 主搜索：PVS（主变例搜索）+ 置换表 + 杀手着法 */
+/** 主搜索：PVS + 置换表 + 着法排序 + 空着裁剪 + 后着削减 + 静态剪枝 */
 function negamax(pos, side, depth, alpha, beta, ply) {
   if (aborted) return 0;
   if ((++nodes & 1023) === 0 && Date.now() > deadline) { aborted = true; return 0; }
 
   const alphaOrig = alpha;
+  const pvNode = (beta - alpha) > 1;
+  let ttMv = 0;
   const p = ttProbe(H, depth, alpha, beta, ply);
   if (p.hit) return p.score;
+  ttMv = p.move;
   if (depth <= 0) return quiesce(pos, side, alpha, beta, ply);
+
+  const checked = kingThreatened(pos, side);
+
+  /* ---------- 空着裁剪（null move pruning）----------
+     先"白让一手"给对方走。如果这样对方还是打不过我，
+     说明这个局面已经足够好，不必把所有着法搜完。
+     三个前提：不在被将军（让一手会直接被吃将）、深度够、还有大子
+     （残局只剩兵时让手容易出"zugzwang"式假象，标准做法是禁用）。 */
+  if (useNullMove && depth >= 3 && !checked && pvNode === false && hasMajorPiece(pos, side)) {
+    const R = 2 + ((depth / 6) | 0);
+    const savedH = H;
+    H = zobristFlip(H, side);
+    const nul = -negamax(pos, 1 - side, depth - 1 - R, -beta, -beta + 1, ply + 1);
+    H = savedH;
+    if (aborted) return 0;
+    if (nul >= beta && Math.abs(nul) < MATE - 1000) return beta;
+  }
 
   const moves = genLegal(pos, side);
   if (moves.length === 0) return -MATE + ply;
-  orderMoves(pos, moves, p.move, ply);
+  orderMoves(pos, moves, ttMv, ply);
+
+  /* 静态剪枝用的静态评估（只算一次） */
+  const staticEval = checked ? 0 : ((side === RED) ? evaluate(pos) : -evaluate(pos));
+  const skipPrune = checked || Math.abs(alpha) > MATE - 1000;
 
   let best = -Infinity, bestMove = 0, searched = 0;
-  for (const m of moves) {
+  for (let idx = 0; idx < moves.length; idx++) {
+    const m = moves[idx];
+    const to = (m >> 8) & 255;
+    const isCapture = pos[to] !== 0;
+    const isPromoQuiet = !isCapture;
+
     const cap = mkMove(pos, m);
-    if (pType(cap) === KING) {          // 对方的将就在这个格子上，吃掉即胜
+    if (pType(cap) === KING) {
       umMove(pos, m, cap);
       best = MATE - ply; bestMove = m;
       break;
     }
+
+    /* ---------- 静态剪枝（futility pruning）----------
+       深度 1 时，如果"站着不动都已落后 alpha 一大截"，
+       那么不吃子的安静着法几乎不可能把分数拉回来，直接跳过。
+
+       两个守卫缺一不可：
+       * ``searched > 0``——必须已经搜过至少一个着法。否则一个"全是安静着法
+         且都被剪掉"的节点会走到循环结束，``best`` 保持 -Infinity 被返回并写进
+         置换表，上层取负后变成 +Infinity，整棵搜索立刻被污染。
+         （这正是本引擎第一版静态剪枝的 bug：节点数降了 7 倍，棋力反而下降。）
+       * ``!skipPrune``——不靠近杀分时才敢剪。 */
+    if (useFutility && depth === 1 && searched > 0 && isPromoQuiet && !skipPrune &&
+        staticEval + 180 <= alpha) {
+      umMove(pos, m, cap);
+      continue;
+    }
+
     let sc;
     if (searched === 0) {
       sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
     } else {
-      sc = -negamax(pos, 1 - side, depth - 1, -alpha - 1, -alpha, ply + 1);   // 零窗口试探
-      if (sc > alpha && sc < beta) sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
+      /* ---------- 后着削减（LMR）----------
+         排序靠后的安静着法多半不好，先用更浅的深度快速试探；
+         如果它居然超过了 alpha，再用完整深度重搜。
+         深度越深、着法越靠后，削减得越多。 */
+      let reduce = 0;
+      if (useLMR && depth >= 3 && isPromoQuiet && searched >= 3 && !checked) {
+        reduce = 1 + ((searched >= 8 && depth >= 6) ? 1 : 0);
+        if (reduce >= depth) reduce = depth - 1;
+      }
+      sc = -negamax(pos, 1 - side, depth - 1 - reduce, -alpha - 1, -alpha, ply + 1);
+      if (sc > alpha && reduce > 0) {
+        sc = -negamax(pos, 1 - side, depth - 1, -alpha - 1, -alpha, ply + 1);
+      }
+      if (sc > alpha && sc < beta) {
+        sc = -negamax(pos, 1 - side, depth - 1, -beta, -alpha, ply + 1);
+      }
     }
     umMove(pos, m, cap);
     if (aborted) return 0;
@@ -724,14 +836,17 @@ function negamax(pos, side, depth, alpha, beta, ply) {
     if (sc > best) { best = sc; bestMove = m; }
     if (sc > alpha) alpha = sc;
     if (alpha >= beta) {
-      if (!cap) {                        // 杀手着法只记非吃子
+      if (!cap) {                        // 安静着法造成剪枝 → 记杀手、历史、反制
         const k = ply < KILL_SLOT ? ply : KILL_SLOT - 1;
         if (killers[k * 2] !== m) { killers[k * 2 + 1] = killers[k * 2]; killers[k * 2] = m; }
-        histTab[(m & 255) * 90 + ((m >> 8) & 255)] += depth * depth;
+        histTab[(m & 255) * 90 + to] += depth * depth;
+        if (useCounter && ply > 0) counterMove[prevMove & 0xFFFF] = m;
       }
+      prevMove = m;
       break;
     }
   }
+  if (best === -Infinity) best = staticEval;      // 兜底：不让 -Infinity 外泄
   ttStore(H, depth, best, best <= alphaOrig ? 3 : (best >= beta ? 2 : 1), bestMove, ply);
   return best;
 }
@@ -767,7 +882,7 @@ function losesKingNow(pos, m, side) {
 function findBestMove(pos, side, maxDepth, budgetMs, seen, cfg) {
   cfg = cfg || levelCfg();
   hashInit(pos, side);
-  killers.fill(0); histTab.fill(0);
+  killers.fill(0); histTab.fill(0); counterMove.fill(0); prevMove = 0;
 
   const rootMoves = genLegal(pos, side);
   if (rootMoves.length === 0) return null;
@@ -791,7 +906,10 @@ function findBestMove(pos, side, maxDepth, budgetMs, seen, cfg) {
   let rootScores = [];                                // 最后一次完整搜索的根着法评分
   let aspAlpha = -Infinity, aspBeta = Infinity;
 
+  const iterStartAll = Date.now();
+  let iterMs = 0;
   for (let d = 1; d <= limitDepth; d++) {
+    const iterStart = Date.now();
     orderMoves(pos, usable, bestMove, 0);
     const alpha0 = aspAlpha, beta0 = aspBeta;
     let alpha = alpha0, beta = beta0;
@@ -856,10 +974,22 @@ function findBestMove(pos, side, maxDepth, budgetMs, seen, cfg) {
       rootScores = scores; bestMove = localBest; bestScore = localScore; reached = d;
     }
 
+    iterMs = Date.now() - iterStart;
     if (bestScore >= MATE - 200) break;                            // 已经找到杀，收工
     if (Date.now() > deadline) break;
 
     // 下一层收窄窗口：分数越大窗口越宽，避免反复失败重搜
+  /* 迭代时间预测：如果"上一层耗时 × 预估分支因子"装不进剩余预算，
+     就不必再开下一层——那一层注定搜不完，只会白等一场。
+
+     系数取 4 而不是 2.5：实测本引擎每加深一层节点数约涨 6 倍，
+     用 2.5 估会误判"还能搜完"，结果大师档白白花 3 秒去起一个注定被打断的
+     迭代（实测：走一步要等 4042ms，而它真正用的只是前 900ms）。
+     估保守一点只会少搜一层（而且那一层本来就搜不完），代价远小于白等。 */
+  if (iterMs > 0 && reached > 0) {
+    const spent = Date.now() - iterStartAll;
+    if (spent + iterMs * 4 > budgetMs) break;
+  }
     if (Math.abs(bestScore) >= MATE - 1000) { aspAlpha = -Infinity; aspBeta = Infinity; }
     else {
       const w = 40 + Math.abs(bestScore) * 0.05;

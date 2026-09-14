@@ -12,3 +12,6 @@ Thumbs.db
 *.wav
 *.flac
 !xiangqi/bgm.mp3
+
+# 象棋打包产物（用 xiangqi/build.sh 本地生成，不入库以免仓库膨胀）
+xiangqi/dist/

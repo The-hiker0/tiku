@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    原创中国象棋应用图标。
+    不包含任何第三方商标或美术素材：棋盘木纹、棋子、字形都是本文件里现画的。
+    「帅」字是标准汉字，不受版权保护；整体构图与配色为原创设计。
+  -->
+  <defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#8C2F1B"/>
+      <stop offset="45%"  stop-color="#6E2213"/>
+      <stop offset="100%" stop-color="#4A150C"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="38%" r="62%">
+      <stop offset="0%"   stop-color="#B8472A" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="piece" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%"   stop-color="#FFF6E2"/>
+      <stop offset="55%"  stop-color="#F2DFB8"/>
+      <stop offset="100%" stop-color="#D9BE8C"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#D8A657"/>
+      <stop offset="100%" stop-color="#8A5F22"/>
+    </linearGradient>
+    <filter id="soft" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- 底板 -->
+  <rect width="512" height="512" rx="112" fill="url(#wood)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+
+  <!-- 棋盘格线（细，只作质感，不抢主体） -->
+  <g stroke="#F6E7C8" stroke-opacity="0.20" stroke-width="3" stroke-linecap="round">
+    <line x1="86"  y1="128" x2="426" y2="128"/>
+    <line x1="86"  y1="192" x2="426" y2="192"/>
+    <line x1="86"  y1="256" x2="426" y2="256"/>
+    <line x1="86"  y1="320" x2="426" y2="320"/>
+    <line x1="86"  y1="384" x2="426" y2="384"/>
+    <line x1="128" y1="96"  x2="128" y2="416"/>
+    <line x1="192" y1="96"  x2="192" y2="416"/>
+    <line x1="256" y1="96"  x2="256" y2="416"/>
+    <line x1="320" y1="96"  x2="320" y2="416"/>
+    <line x1="384" y1="96"  x2="384" y2="416"/>
+  </g>
+
+  <!-- 棋子 -->
+  <g filter="url(#soft)">
+    <circle cx="256" cy="256" r="146" fill="url(#rim)"/>
+    <circle cx="256" cy="256" r="132" fill="url(#piece)"/>
+    <circle cx="256" cy="256" r="112" fill="none" stroke="#B4341C" stroke-width="7" stroke-opacity="0.85"/>
+  </g>
+
+  <!-- 帅（标准汉字，红色） -->
+  <text x="256" y="256" text-anchor="middle" dominant-baseline="central"
+        font-family="'Noto Serif CJK SC','Source Han Serif SC','Songti SC','SimSun',serif"
+        font-size="176" font-weight="700" fill="#B4341C">帅</text>
+</svg>

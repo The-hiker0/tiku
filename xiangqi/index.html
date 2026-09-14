@@ -3,6 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- PWA：让浏览器把它当成一个可以"安装"的应用（手机加到主屏幕 / 桌面安装） -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#12161c">
+<meta name="description" content="单文件中国象棋：四档难度、内置开局库、引擎分析面板。可离线使用。">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="中国象棋">
 <title>中国象棋</title>
 <style>
   :root{
@@ -2366,6 +2377,15 @@ document.getElementById('overlayBtn').addEventListener('click', newGame);
 window.addEventListener('resize', draw);
 
 newGame();
+
+/* ---------- 注册 Service Worker ----------
+   只在 http/https 下注册：file:// 打开时浏览器不支持 SW，
+   所以直接双击 HTML 文件使用时不会有任何报错，只是不能"安装"。 */
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* 静默失败，不影响游戏 */ });
+  });
+}
 </script>
 </body>
 </html>
